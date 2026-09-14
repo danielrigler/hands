@@ -1,8 +1,10 @@
--- hands
--- 2.0.0 @dani
--- a piano player that
--- improvises. two hands,
--- pedal, drifting keys.
+--
+--
+--
+--          hands v0.01
+--           @dddstudio
+--
+--
 --
 -- E1 page
 -- E2 E3 the two dials
