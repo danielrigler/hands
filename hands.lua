@@ -12,7 +12,7 @@
 -- K2 vary
 -- K3 new piece
 -- K1+K2 run/stop
--- K1+K3 randomize all
+-- K1+K3 randomize all 
 
 local Gen = include('lib/gen')
 local T = include('lib/theory')
