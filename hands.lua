@@ -264,90 +264,13 @@ function init()
   math.randomseed(floor(util.time() * 1000) % 2147483647)
   build_devs()
 
-  params:add_option("style", "style", T.SNAMES, 1)
-  params:set_action("style", function(v)
-    p.style = v - 1
-    local st = T.STYLE[p.style]
-    if st then for k, x in pairs(st.d) do params:set(k, x) end end
-    dirty = true
-    sdirty = true
-  end)
-  params:add_group("out", 6)
-  params:add_option("dev", "midi device", devs, 1)
-  params:set_action("dev", function(v) panic(); md = midi.connect(v) end)
-  params:add_number("chan", "channel", 1, 16, 1)
-  params:set_action("chan", function(v) panic(); ch = v end)
-  params:add_number("lchan", "left hand ch", 1, 16, 1)
-  params:set_action("lchan", function(v) panic(); lch = v end)
-  params:add_number("poly", "synth voices", 1, 64, 16)
-  params:set_action("poly", function(v) poly = v; p.poly = v; dirty = true end)
-  params:add_control("vel", "velocity", cs.new(20, 127, 'lin', 1, 80))
-  params:set_action("vel", function(v) p.vel = v; dirty = true end)
-  params:add_binary("pedcc", "send cc64", "toggle", 1)
-  params:set_action("pedcc", function(v)
-    pedcc = v == 1
-    p.pedcc = pedcc
-    dirty = true
-    if not pedcc then pcc(0) end
-  end)
-
-  params:add_group("feel", 5)
-  params:add_control("pedal", "pedal", cs.new(0, 1, 'lin', 0, 1.0))
-  params:set_action("pedal", function(v) p.pedal = v end)
-  params:add_control("swing", "swing", cs.new(0, 1, 'lin', 0, 0.08))
-  params:set_action("swing", function(v) p.swing = v; sdirty = true end)
-  params:add_control("hum", "humanize", cs.new(0, 1, 'lin', 0, 0.3))
-  params:set_action("hum", function(v) p.hum = v end)
-  params:add_control("rubato", "rubato", cs.new(0, 1, 'lin', 0, 0.4))
-  params:set_action("rubato", function(v) p.rubato = v end)
-  params:add_control("reso", "resonance", cs.new(0, 1, 'lin', 0, 0))
-  params:set_action("reso", function(v) p.reso = v; dirty = true end)
-
-  params:add_group("music", 15)
-  params:add_option("key", "key", KEYS, 1)
-  params:set_action("key", function(v)
-    p.rootlock = v > 1
-    if v > 1 then p.root = v - 2; if gen then gen.root = v - 2 end end
-    sdirty = true
-  end)
-  params:add_number("rngw", "range", 14, 74, 48)
-  params:set_action("rngw", function(v) p.rngw = v; dirty = true end)
-  params:add_control("pace", "pace", cs.new(6, 200, 'exp', 0, 30, "bpm"))
-  params:set_action("pace", function(v) step_sec = 15 / v; p.step = step_sec; dirty = true end)
-  params:add_control("space", "space", cs.new(0, 1, 'lin', 0, 0.35))
-  params:set_action("space", function(v) p.space = v; dirty = true end)
-  params:add_control("motion", "motion", cs.new(0, 1, 'lin', 0, 0.6))
-  params:set_action("motion", function(v) p.motion = v; dirty = true end)
-  params:add_control("syn", "syncopation", cs.new(0, 1, 'lin', 0, 0))
-  params:set_action("syn", function(v) p.syn = v; dirty = true end)
-  params:add_control("rep", "repeat", cs.new(0, 1, 'lin', 0, 0.57))
-  params:set_action("rep", function(v) p.rep = v; dirty = true end)
-  params:add_control("len", "note length", cs.new(0, 1, 'lin', 0, 0.58))
-  params:set_action("len", function(v) p.len = v; dirty = true end)
-  params:add_control("tens", "tension", cs.new(0, 1, 'lin', 0, 0.35))
-  params:set_action("tens", function(v) p.tens = v; dirty = true end)
-  params:add_control("mode", "mode", cs.new(-5, 2, 'lin', 0, 0))
-  params:set_action("mode", function(v) p.bright = v; dirty = true end)
-  params:add_number("reg", "register", 40, 92, 66)
-  params:set_action("reg", function(v) p.centre = v; dirty = true end)
-  params:add_control("left", "left hand", cs.new(0, 1, 'lin', 0, 0.45))
-  params:set_action("left", function(v) p.lh = v; dirty = true end)
-  params:add_control("right", "right hand", cs.new(0, 1, 'lin', 0, 0.3))
-  params:set_action("right", function(v) p.rh = v; dirty = true end)
-  params:add_control("harm", "harmony", cs.new(0, 1, 'lin', 0, 0.35))
-  params:set_action("harm", function(v)
-    if gen and math.abs(v - p.harm) > 0.18 then gen:build_prog(random(5)) end
-    p.harm = v
-  end)
-  params:add_control("drift", "drift", cs.new(0, 1, 'lin', 0, 0.3))
-  params:set_action("drift", function(v) p.drift = v; dirty = true end)
-
-  params:add_separator("act", "actions")
-  params:add_trigger("newp", "new piece")
+  params:add_separator("act", "")
+  
+  params:add_trigger("newp", "New Piece")
   params:set_action("newp", function() if gen then gen:reroll(false); sdirty = true end end)
-  params:add_trigger("vary", "vary")
+  params:add_trigger("vary", "Vary")
   params:set_action("vary", function() if gen then gen:mutate(); sdirty = true end end)
-  params:add_trigger("chaos", "randomize all")
+  params:add_trigger("chaos", "Randomize All")
   params:set_action("chaos", function()
     if not gen then return end
     local sd = T.STYLE[p.style]
@@ -386,6 +309,88 @@ function init()
     params:set("swing", p.swing, true)
     params:set("hum", p.hum, true)
     sdirty = true
+  end)
+
+  params:add_separator("sett", "")
+
+  params:add_group("Music", 16)
+    params:add_option("style", "style", T.SNAMES, 1)
+  params:set_action("style", function(v)
+    p.style = v - 1
+    local st = T.STYLE[p.style]
+    if st then for k, x in pairs(st.d) do params:set(k, x) end end
+    dirty = true
+    sdirty = true
+  end)
+  params:add_option("key", "key", KEYS, 1)
+  params:set_action("key", function(v)
+    p.rootlock = v > 1
+    if v > 1 then p.root = v - 2; if gen then gen.root = v - 2 end end
+    sdirty = true
+  end)
+
+  params:add_number("rngw", "range", 14, 74, 48)
+  params:set_action("rngw", function(v) p.rngw = v; dirty = true end)
+  params:add_control("pace", "pace", cs.new(6, 200, 'exp', 0, 30, "bpm"))
+  params:set_action("pace", function(v) step_sec = 15 / v; p.step = step_sec; dirty = true end)
+  params:add_control("space", "space", cs.new(0, 1, 'lin', 0, 0.35))
+  params:set_action("space", function(v) p.space = v; dirty = true end)
+  params:add_control("motion", "motion", cs.new(0, 1, 'lin', 0, 0.6))
+  params:set_action("motion", function(v) p.motion = v; dirty = true end)
+  params:add_control("syn", "syncopation", cs.new(0, 1, 'lin', 0, 0))
+  params:set_action("syn", function(v) p.syn = v; dirty = true end)
+  params:add_control("rep", "repeat", cs.new(0, 1, 'lin', 0, 0.57))
+  params:set_action("rep", function(v) p.rep = v; dirty = true end)
+  params:add_control("len", "note length", cs.new(0, 1, 'lin', 0, 0.58))
+  params:set_action("len", function(v) p.len = v; dirty = true end)
+  params:add_control("tens", "tension", cs.new(0, 1, 'lin', 0, 0.35))
+  params:set_action("tens", function(v) p.tens = v; dirty = true end)
+  params:add_control("mode", "mode", cs.new(-5, 2, 'lin', 0, 0))
+  params:set_action("mode", function(v) p.bright = v; dirty = true end)
+  params:add_number("reg", "register", 40, 92, 66)
+  params:set_action("reg", function(v) p.centre = v; dirty = true end)
+  params:add_control("left", "left hand", cs.new(0, 1, 'lin', 0, 0.45))
+  params:set_action("left", function(v) p.lh = v; dirty = true end)
+  params:add_control("right", "right hand", cs.new(0, 1, 'lin', 0, 0.3))
+  params:set_action("right", function(v) p.rh = v; dirty = true end)
+  params:add_control("harm", "harmony", cs.new(0, 1, 'lin', 0, 0.35))
+  params:set_action("harm", function(v)
+    if gen and math.abs(v - p.harm) > 0.18 then gen:build_prog(random(5)) end
+    p.harm = v
+  end)
+  params:add_control("drift", "drift", cs.new(0, 1, 'lin', 0, 0.3))
+  params:set_action("drift", function(v) p.drift = v; dirty = true end)
+
+  params:add_group("Feel", 5)
+  params:add_control("pedal", "pedal", cs.new(0, 1, 'lin', 0, 1.0))
+  params:set_action("pedal", function(v) p.pedal = v end)
+  params:add_control("swing", "swing", cs.new(0, 1, 'lin', 0, 0.08))
+  params:set_action("swing", function(v) p.swing = v; sdirty = true end)
+  params:add_control("hum", "humanize", cs.new(0, 1, 'lin', 0, 0.3))
+  params:set_action("hum", function(v) p.hum = v end)
+  params:add_control("rubato", "rubato", cs.new(0, 1, 'lin', 0, 0.4))
+  params:set_action("rubato", function(v) p.rubato = v end)
+  params:add_control("reso", "resonance", cs.new(0, 1, 'lin', 0, 0))
+  params:set_action("reso", function(v) p.reso = v; dirty = true end)
+
+
+  params:add_group("Output", 6)
+  params:add_option("dev", "midi device", devs, 1)
+  params:set_action("dev", function(v) panic(); md = midi.connect(v) end)
+  params:add_number("chan", "channel", 1, 16, 1)
+  params:set_action("chan", function(v) panic(); ch = v end)
+  params:add_number("lchan", "left hand ch", 1, 16, 1)
+  params:set_action("lchan", function(v) panic(); lch = v end)
+  params:add_number("poly", "synth voices", 1, 64, 16)
+  params:set_action("poly", function(v) poly = v; p.poly = v; dirty = true end)
+  params:add_control("vel", "velocity", cs.new(20, 127, 'lin', 1, 80))
+  params:set_action("vel", function(v) p.vel = v; dirty = true end)
+  params:add_binary("pedcc", "send cc64", "toggle", 1)
+  params:set_action("pedcc", function(v)
+    pedcc = v == 1
+    p.pedcc = pedcc
+    dirty = true
+    if not pedcc then pcc(0) end
   end)
 
   local function piecefile(fn)
