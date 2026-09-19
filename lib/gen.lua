@@ -1001,8 +1001,8 @@ function G:ornament(flat, ev, pn, tk)
   if dir > 0 or random() > (self.stray or 0) * 0.8 then g = self:snaps(g) end
   g = self:fold(g)
   if g == pn then return end
-  local t = tk > 1 and tk - 1 or tk
-  local e = newev(t, 1, max(1, ev.v - 18), 0)
+  if tk < 2 then return end
+  local e = newev(tk - 1, 1, max(1, ev.v - 18), 0)
   e.n[1] = g
   e.g = true
   e.o = clamp(self.gof + self:lag(0) * 0.4, 0, 0.95)
@@ -1053,8 +1053,8 @@ function G:cadence_note(pn, final)
   else tgt = random() < 0.5 and 4 or (random() < 0.5 and 1 or 6) end
   local pc = self.s[tgt + 1] % 12
   for k = 0, 6 do
-    if (pn - k - self.root) % 12 == pc then return pn - k end
-    if (pn + k - self.root) % 12 == pc then return pn + k end
+    if (pn - k - self.root) % 12 == pc then return self:fold(pn - k) end
+    if (pn + k - self.root) % 12 == pc then return self:fold(pn + k) end
   end
   return pn
 end
@@ -1460,9 +1460,9 @@ function G:shape_for(pr)
     end
   end
   local set = self.shset
-  local hm = (self.p.harm or 0.35) - 0.4
+  local hs = hm - 0.4
   for j = 1, ns do
-    local f = 1 + (T.SHAPES[j].n - 3) * hm * 1.15
+    local f = 1 + (T.SHAPES[j].n - 3) * hs * 1.15
     if f < 0.06 then f = 0.06 end
     w[j] = w0[j] * f
   end

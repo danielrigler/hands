@@ -13,10 +13,6 @@
 -- K3 new piece
 -- K1+K2 run/stop
 -- K1+K3 randomize all
---
--- free running by default;
--- params > clock to follow
--- the norns tempo
 
 local Gen = include('lib/gen')
 local T = include('lib/theory')
