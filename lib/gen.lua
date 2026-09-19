@@ -9,7 +9,7 @@ G.__index = G
 local function clamp(x, a, b) if x < a then return a elseif x > b then return b else return x end end
 
 local function newev(t, d, v, hand)
-  return {t = t, d = d, d0 = d, v = v, h = hand, n = {}, r = 1, o = 0}
+  return {t = t, d = d, d0 = d, v = v, v0 = v, h = hand, n = {}, r = 1, o = 0}
 end
 
 local FORMS = {
@@ -33,6 +33,7 @@ function G.new(p)
   o.pcw, o.cw, o.chw, o.cpc, o.pcdeg = {}, {}, {}, {}, {}
   o.hpc, o.hk, o.insc = {}, {}, {}
   o.pw, o.rw, o.wb, o.wb0 = {}, {}, {}, {}
+  o.pwl = {}
   o.mask, o.sc, o.dur, o.M = {}, {}, {}, {}
   o.ct, o.prev, o.sflat, o.flat = {}, {}, {}, {}
   o.rhm, o.secpat = {}, {1,1,1}
@@ -59,6 +60,9 @@ function G.new(p)
   o.choff, o.newchord, o.pedb = 0, true, 1
   o.res, o.resdir = nil, -1
   o.bo = 0
+  o.progdirty = false
+  o.vo, o.pvo = {}, {}
+  o.vn, o.mlow = 0, 127
   o:derive()
   o:reroll(false)
   return o
@@ -82,9 +86,13 @@ function G:derive()
   self.song = (1 - rh) ^ 1.1
   self.orn = clamp(rh * 0.85 + (sl - 1) * 0.15, 0, 0.9)
   self.ratch = max(0, rh - 0.65) * 1.4
-  self.app = self.song * 0.32
+  self.app = (0.06 + self.song * 0.28) * (0.35 + 1.3 * (p.tens or 0.35))
+  -- without this the line was a pure random walk of seconds
+  self.leapp = clamp(0.10 + 0.15 * self.song + 0.10 * self.cx, 0, 0.36)
   local rp = p.rep or 0.45
-  self.rep = clamp(rp * 1.05 - 0.05 + (0.14 - 0.28 * rh), 0, 0.95)
+  -- curved so the low half keeps the old sparse feel and the top of the
+  -- range reaches genuine bar-for-bar repetition
+  self.rep = clamp(rp ^ 1.7 * 1.1 + (0.12 - 0.24 * rh), 0, 0.97)
   self.tvar = clamp(1.3 - rp * 1.5, 0.05, 1)
   self.freeb = clamp(0.85 - rp * 0.8, 0.05, 1)
   self.syn = p.syn or 0
@@ -94,6 +102,9 @@ function G:derive()
   self.legato = clamp(0.12 + (p.len or 0.55) * 0.86, 0.05, 0.99)
   self.artbase = clamp(0.45 + (p.len or 0.55) * 0.8, 0.4, 1.3)
   local tn = p.tens or 0.35
+  -- most bars come from the motif path, so tension needs a hand in it:
+  -- above the midpoint the line starts leaning on chromatic neighbours
+  self.chrom = clamp((tn - 0.4) * 0.6, 0, 0.36)
   self.lock = clamp(2.5 - tn * 2.3 - 0.5 * self.cx, 0.25, 2.6)
   self.pull = 0.28 + tn * 0.5
   self.reso = p.reso
@@ -127,7 +138,10 @@ function G:build_secpat()
       for i = 1, #ls do
         for j = 1, #g do if g[j] == ls[i] then k[#k+1] = ls[i] end end
       end
-      g = #k > 0 and k or ls
+      -- if the style has no pattern at this activity level, keep the level
+      -- and drop the style filter. Falling back to the whole style set
+      -- instead made p.lh a no-op for several styles.
+      if #k > 0 then g = k end
     end
     sp[slot] = g[(self.lhseed + slot * 3) % #g + 1]
   end
@@ -157,7 +171,7 @@ function G:plan_registers()
 end
 
 function G:bnorm()
-  return clamp(self.p.bright + self.bo + self.db, -5, 2)
+  return clamp(self.p.bright + self.bo + self.db, -5, 3)
 end
 
 function G:drift(dt)
@@ -234,7 +248,8 @@ function G:apply_scale(alt)
   if alt then s[self.pv] = s[self.pv] + self.pdir end
   local inf = self.infl
   if inf == 1 and s[7] < 11 then s[7] = s[7] + 1 end
-  local ch = 0.008 + 0.05 * self.cx + 0.035 * (self.p.tens or 0.35)
+  local tn = self.p.tens or 0.35
+  local ch = 0.008 + 0.05 * self.cx + 0.17 * tn * tn
   for i = 1, 12 do w[i] = ch end
   for i = 1, 7 do
     local d = T.DEG_W[i]
@@ -275,11 +290,16 @@ function G:update_lut()
   local cx = self.cx
   local vp = 3.2 + 24 * cx * cx
   local vr = (15 + 34 * cx) * (1 + 0.32 * self.bn) * (0.5 + (self.p.rngw or 48) / 64)
-  local pw, rw = self.pw, self.rw
+  local pw, rw, pwl = self.pw, self.rw, self.pwl
+  -- vl is deliberately wide and notched near zero: when the line is asked to
+  -- leap it has to actually leap, not drift by a step.
+  local vl = 30 + 46 * cx
   for d = -24, 24 do
     local q = d * d
     pw[d+25] = exp(-q / (2 * vp))
     rw[d+25] = exp(-q / (2 * vr))
+    local a = d < 0 and -d or d
+    pwl[d+25] = exp(-q / (2 * vl)) * (a < 3 and 0.02 or (a < 5 and 0.55 or 1))
   end
   pw[25] = 0.20
 end
@@ -324,20 +344,75 @@ function G:build_chord(deg, shi)
     self.lhbase = self.lhbase + 12
   end
   if self.lhbase < self.lo then self.lhbase = self.lhbase + 12 end
+  self:voice_chord()
+end
+
+-- how far apart two adjacent voices have to sit before the register turns
+-- them to mud. Close thirds are fine at the top of the staff and awful an
+-- octave below the bass clef.
+local function minint(n)
+  if n < 40 then return 12
+  elseif n < 47 then return 7
+  elseif n < 53 then return 5
+  elseif n < 59 then return 4
+  end
+  return 2
+end
+
+-- Lay the chord out the way a player would: root in the bass, then each
+-- upper tone taken to whichever octave sits nearest where that voice was in
+-- the previous chord. Before this every chord was a root-position stack, so
+-- the whole accompaniment jumped bodily with each change instead of holding
+-- common tones and moving the rest by a step.
+function G:voice_chord()
+  local ct, vo, pv = self.ct, self.vo, self.pvo
+  local n = #ct
+  local base = self.lhbase
+  local mel = (self.mlow or 127) - 2
+  -- the melody wins the register argument. If the bass has drifted up far
+  -- enough that the chord cannot fit beneath the right hand, drop the whole
+  -- voicing an octave instead of crossing into it.
+  if base + 7 > mel and base - 12 >= self.lo then base = base - 12 end
+  for i = #vo, 1, -1 do vo[i] = nil end
+  vo[1] = base
+  if n < 2 then return end
+  local top = self.split + 4
+  local m = floor(self.cbase) - 2
+  if m < top then top = m end
+  if top < base + 7 then top = base + 7 end
+  if mel < top then top = mel end
+  local last, k = base, 1
+  for i = 2, n do
+    local x = base + ct[i]
+    local ref = pv[i] or (base + 4 + (i - 2) * 4)
+    x = x + 12 * floor((ref - x) / 12 + 0.5)
+    local gap = minint(last)
+    while x < last + gap do x = x + 12 end
+    while x > top and x - 12 >= last + gap do x = x - 12 end
+    while x - last > 16 and x - 12 >= last + gap do x = x - 12 end
+    if x <= top then
+      k = k + 1
+      vo[k] = x
+      pv[i] = x
+      last = x
+    end
+  end
 end
 
 function G:lhnote(k)
-  local ct = self.ct
-  local n = #ct
+  local vo = self.vo
+  local n = #vo
   if n < 1 then return self.lhbase end
   local o = (k - 1) // n
   local i = (k - 1) % n + 1
-  return self.lhbase + ct[i] + 12 * o
+  return vo[i] + 12 * o
 end
 
 function G:build_cw(ms)
   local base, cw = self.chw, self.cw
-  local e = 0.35 + self.lock * ms
+  -- lock has to contribute at ms == 0 as well, otherwise tension does
+  -- nothing on the weak beats, which is most of the notes.
+  local e = 0.15 + self.lock * (0.35 + 0.65 * ms)
   for i = 1, 12 do cw[i] = base[i] ^ e end
   local t = T.TEND[self.pdeg]
   if t and ms > 0.35 then
@@ -346,16 +421,20 @@ function G:build_cw(ms)
   end
 end
 
-function G:pick(centre)
-  local lo = max(self.split - 2, floor(centre) - 17)
-  local hi = min(self.hi, floor(centre) + 17)
+function G:pick(centre, leap)
+  local lo = max(self.split, floor(centre) - (leap and 21 or 17))
+  local hi = min(self.hi, floor(centre) + (leap and 21 or 17))
   if hi < lo then lo = max(self.lo, hi - 12) end
-  local pcw, cw, pw, rw, wb = self.pcw, self.cw, self.pw, self.rw, self.wb
+  local pcw, cw, wb = self.pcw, self.cw, self.wb
+  local pw, rw = (leap and self.pwl or self.pw), self.rw
+  local cp = self.cpc
   local root, prev, ci = self.root, self.pn, floor(centre)
   local li = self.li
   local bd, bs = 0, 1
-  if li >= 6 then bd = -1; bs = 2.5
-  elseif li <= -6 then bd = 1; bs = 2.5
+  if li >= 6 then bd = -1; bs = 3.4
+  elseif li <= -6 then bd = 1; bs = 3.4
+  elseif li >= 3 then bd = -1; bs = 2.2
+  elseif li <= -3 then bd = 1; bs = 2.2
   elseif li >= 1 and li <= 2 then bd = 1; bs = 2.0
   elseif li <= -1 and li >= -2 then bd = -1; bs = 2.0 end
   local rs, rd = self.res, self.resdir
@@ -366,7 +445,11 @@ function G:pick(centre)
     local b = pp - ci + 25
     local x = 0
     if a > 0 and a < 50 and b > 0 and b < 50 then
-      x = pw[a] * rw[b] * pcw[(pp - root) % 12 + 1] * cw[(pp - root) % 12 + 1]
+      local iv = (pp - root) % 12 + 1
+      x = pw[a] * rw[b] * pcw[iv] * cw[iv]
+      -- a leap that lands off the chord just sounds like a mistake
+      -- at high tension a leap is allowed to land somewhere unresolved
+      if leap and not cp[iv] then x = x * (0.05 + 0.45 * self.p.tens) end
       if bd ~= 0 and (pp - prev) * bd > 0 then x = x * bs end
       if rs then
         local dd = (pp - rs) * rd
@@ -408,7 +491,7 @@ function G:stepup(n)
 end
 
 function G:fold(n, lo, hi)
-  lo = lo or self.split - 2
+  lo = lo or self.split
   hi = hi or self.hi
   while n < lo do n = n + 12 end
   while n > hi do n = n - 12 end
@@ -632,12 +715,14 @@ function G:score_motif(m)
   local span = hi - lo
   local sc = 0
   if span >= 3 and span <= 8 then sc = sc + 30
-  else sc = sc - 9 * (span < 3 and (3 - span) or (span - 8)) end
+  else sc = sc - 16 * (span < 3 and (3 - span) or (span - 8)) end
   local iv = n - 1
   if iv > 0 then
     local lr = leaps / iv
     local e = lr - 0.26
     sc = sc + 25 - 210 * e * e + 30 * (steps / iv) - reps * 7
+    -- a shape made entirely of seconds wanders instead of going somewhere
+    if leaps == 0 and iv >= 3 then sc = sc - 26 end
   end
   local wrap = m.d[n] - m.d[1]
   if wrap < 0 then wrap = -wrap end
@@ -670,7 +755,9 @@ function G:score_motif(m)
 end
 
 function G:best_motif(len, avoid)
-  local tries = 3 + floor(self.song * 4)
+  -- only runs on reroll and mutate, so the extra candidates are free and
+  -- the whole piece is built on whichever one wins
+  local tries = 10 + floor(self.song * 10)
   local bm, bs = nil, -1e9
   for i = 1, tries do
     local m = self:make_motif(len, avoid)
@@ -722,9 +809,19 @@ end
 function G:vel(i, acc, hand)
   local p = self.p
   local ms = (self.M[i] - 1) * 0.25
-  local v = p.vel + (ms - 0.7) * self.vrange * 0.8
-            + (random() - 0.5) * (3 + p.hum * 44) + acc + self.bdyn
-  if hand == 1 then v = v - 13 - self.vrange * 0.12 end
+  -- a hand does not re-roll its weight from scratch on every note. The
+  -- unevenness is smoothed so it reads as touch, and the line leans into
+  -- rising phrases and relaxes on falling ones.
+  local amp = 3 + p.hum * 30
+  self.vn = self.vn * 0.58 + (random() - 0.5) * amp * 0.72
+  local v = p.vel + (ms - 0.7) * self.vrange * 0.8 + self.vn + acc + self.bdyn
+  if hand == 1 then
+    v = v - 13 - self.vrange * 0.12
+  else
+    local d = self.li
+    if d > 10 then d = 10 elseif d < -10 then d = -10 end
+    v = v + d * 0.55 * (0.4 + 0.6 * self.song)
+  end
   return clamp(floor(v), 1, 127)
 end
 
@@ -782,8 +879,11 @@ function G:left_hand(flat, pos, cad, rhn, rhm)
   local thin = clamp(self.lhthin + self.p.space * 0.7 + busy * 0.42 * (1.1 - self.p.lh * 0.45), 0, 0.95)
   local hits = {}
   local nh = 0
+  local fi, fk, fm = 0, 0, -1
   for i = 0, bl - 1 do
-    local k = pat.f(i, i // 4, i % 4, nb)
+    local k0 = pat.f(i, i // 4, i % 4, nb)
+    local k = k0
+    if k0 ~= 0 and M[i+1] > fm then fi, fk, fm = i + 1, k0, M[i+1] end
     if k ~= 0 then
       if M[i+1] <= 1 and random() < thin * 0.9 then k = 0
       elseif M[i+1] <= 2 and random() < thin * 0.5 then k = 0 end
@@ -795,6 +895,16 @@ function G:left_hand(flat, pos, cad, rhn, rhm)
       hits[-nh] = k
     end
   end
+  -- thinning must not be able to delete the accompaniment altogether
+  if nh == 0 and rhn > 0 and fk ~= 0 then
+    nh = 1; hits[1] = fi; hits[-1] = fk
+  end
+  -- re-voice now that this bar's melody is known, and take the ceiling from
+  -- the voicing itself. Filtering against split + 4 afterwards was throwing
+  -- away tones the voicing had deliberately placed, which collapsed chords
+  -- to a bare bass note whenever the bass sat high.
+  self:voice_chord()
+  local top = self.vo[#self.vo] or (self.split + 4)
   local ar = 0.72 + 0.28 * self.art
   for j = 1, nh do
     local tk = hits[j]
@@ -804,10 +914,10 @@ function G:left_hand(flat, pos, cad, rhn, rhm)
     local e = newev(tk, max(0.6, (nxt - tk) * ar), base, 1)
     e.o = self:lag(1)
     if k < 0 then
-      local nn = min(#self.ct, 4)
+      local nn = min(#self.vo, 4)
       for i = 1, nn do
         local x = self:lhnote(i)
-        if x >= self.lo and x <= self.split + 4 then e.n[#e.n+1] = x end
+        if x >= self.lo and x <= top then e.n[#e.n+1] = x end
       end
       if #e.n == 0 then e.n[1] = self.lhbase end
       local c = #e.n
@@ -817,7 +927,7 @@ function G:left_hand(flat, pos, cad, rhn, rhm)
       e.s = ((k == -2) and (1 + random() * 1.5) or (0.04 + self.p.hum * 0.22)) * self.gs
     else
       local x = self:lhnote(k)
-      while x > self.split + 3 do x = x - 12 end
+      while x > top do x = x - 12 end
       while x < self.lo do x = x + 12 end
       e.n[1] = x
     end
@@ -846,7 +956,7 @@ function G:ornament(flat, ev, pn, tk)
   if o <= 0 or random() > o * 0.55 then return end
   local dir = random() < 0.5 and -1 or 1
   local g = self:snapc(pn) ~= pn and pn or pn + dir * (random() < 0.75 and 1 or 2)
-  if random() > self.cx * 0.8 then g = self:snaps(g) end
+  if random() > self.cx * 0.5 + (self.p.tens or 0.35) * 0.5 then g = self:snaps(g) end
   g = self:fold(g)
   if g == pn then return end
   local t = tk > 1 and tk - 1 or tk
@@ -945,6 +1055,11 @@ function G:render_motif(flat, m, tr, cad, final, dens, apex)
           end
         end
         pn = self:fold(self:near(pn))
+        if ms < 0.5 and self.chrom > 0 and random() < self.chrom then
+          local q = pn + (self.li >= 0 and -1 or 1)
+          if q >= self.lo and q <= self.hi
+             and not self.insc[(q - self.root) % 12 + 1] then pn = q end
+        end
         local lastn = lastrep and k == kmax
         if cad and lastrep and tk >= bl - 4 and random() < 0.2 + 0.55 * self.p.harm + 0.5 * sg then
           pn = self:cadence_note(pn, final)
@@ -999,9 +1114,17 @@ function G:gen_bar(flat, sec, pos, cad, final, bi, plen)
   for i = 1, bl do rhm[i] = 0 end
 
   if self.conseq then
+    -- these are the same event objects the opening bar used, so they carry
+    -- its timing and touch. Re-humanise them the way a reused bar is.
     local sf = self.sflat
     local ln = 0
-    for i = 1, #sf do flat[#flat+1] = sf[i]; ln = #flat end
+    for i = 1, #sf do
+      local e = sf[i]
+      e.o = self:lag(e.h, cad, false)
+      e.v = clamp(floor((e.v0 or e.v) + (random() - 0.5) * (3 + p.hum * 16)), 1, 127)
+      flat[#flat+1] = e
+      ln = #flat
+    end
     if ln > 0 then
       local e = flat[ln]
       local c = newev(e.t, e.d0 + bl // 4, e.v, 0)
@@ -1035,7 +1158,8 @@ function G:gen_bar(flat, sec, pos, cad, final, bi, plen)
         local centre = self.cbase + self.camp * T.contour(ct, t) + T.pnext(self.pc) * 4 * (1 - 0.7 * self.song)
         if apex then centre = centre + 3 + 4 * self.song end
         self:build_cw(ms)
-        local pn = self:pick(centre)
+        local lp = ms >= 0.45 and abs(self.li) <= 2 and random() < self.leapp
+        local pn = self:pick(centre, lp)
         if ms >= 0.55 and random() < self.lock * 0.42 then
           local q = self:snapc(pn)
           if q ~= self.pn then pn = q end
@@ -1069,13 +1193,21 @@ end
 
 function G:hands(flat, pos, cad, rhm)
   local bl, rhn = self.bl, 0
+  local mlow = 127
   for i = 1, #flat do
     local e = flat[i]
-    if e.h == 0 and e.t >= 1 and e.t <= bl and rhm[e.t] == 0 then
-      rhm[e.t] = 1
-      rhn = rhn + 1
+    if e.h == 0 then
+      local x = e.n[1]
+      if x and x < mlow then mlow = x end
+      if e.t >= 1 and e.t <= bl and rhm[e.t] == 0 then
+        rhm[e.t] = 1
+        rhn = rhn + 1
+      end
     end
   end
+  -- the hands were free to collide, which produced unisons between the
+  -- melody and the top of the chord
+  self.mlow = mlow
   self:left_hand(flat, pos, cad, rhn, rhm)
 end
 
@@ -1107,9 +1239,13 @@ function G:bar_begin()
     local o = floor((raw - self.octc) * self.octsc + 0.5)
     if o ~= self.oct then self.oct = o; self.jump = true end
   end
+  if pos == 0 and self.progdirty then
+    self.progdirty = false
+    self:build_prog(self.pstyle or 1)
+  end
   local ci = bi // self.hr % #self.prog + 1
   local pr = self.prog[ci]
-  local shi = self:shape_for(pr[2])
+  local shi = self:shape_for(pr)
   local same = (self.lastdeg == pr[1] and self.lastsh == shi)
   self.newchord = not same
   self.choff = (bi % self.hr) * bl
@@ -1118,9 +1254,18 @@ function G:bar_begin()
 
   local flat = self.flat
   self.conseq = last and pos > 0 and #self.sflat > 0 and random() < self.song * 0.55
-  local reuse = (not last) and pos > 0 and #flat > 0
-    and random() < self.rep * (same and 1 or 0.45)
-  if not reuse then
+  -- a bar can repeat inside a section, or across a section boundary when the
+  -- form reuses the same slot. Previously only positions 1..bps-2 were
+  -- eligible, which capped the repeat control at roughly one bar in five.
+  local elig = (pos > 0) or (sec > 1 and self.form[sec] == self.form[sec - 1])
+  if final or (last and self.rep < 0.7) then elig = false end
+  local reuse = elig and #flat > 0
+    and random() < self.rep * (same and 1 or (0.4 + 0.55 * self.rep))
+  if reuse then
+    self.bdyn = self:dyn(pos)
+    if not same then self:reseat(flat, pos, last) end
+    self:refresh(flat, last)
+  else
     for i = #flat, 1, -1 do flat[i] = nil end
     self:gen_bar(flat, sec, pos, last, final, bi, plen)
   end
@@ -1162,6 +1307,48 @@ function G:bar_begin()
   self.melsil = nm == 0
 end
 
+-- A repeated bar used to come back byte-identical, down to the velocities
+-- and the timing jitter, which is the one thing a player never does.
+function G:refresh(flat, cad)
+  local hum = self.p.hum
+  local amp = 3 + hum * 16
+  for i = 1, #flat do
+    local e = flat[i]
+    e.o = self:lag(e.h, cad, false)
+    e.v = clamp(floor((e.v0 or e.v) + (random() - 0.5) * amp), 1, 127)
+    local vs = e.vs
+    if vs then
+      local c = #vs
+      for j = 1, c do vs[j] = self:chordvel(e.v, j, c) end
+    end
+  end
+end
+
+-- and if the harmony moved while the bar repeated, the melody has to be
+-- re-seated and the accompaniment rebuilt, or it plays the previous chord
+-- over the current one
+function G:reseat(flat, pos, cad)
+  local bl = self.bl
+  local w = 0
+  for i = 1, #flat do
+    local e = flat[i]
+    if e.h == 0 then
+      w = w + 1
+      flat[w] = e
+      local t = e.t
+      local ms = (t >= 1 and t <= bl) and self.M[t] or 1
+      if e.n[1] and ms >= 3 and not e.g then
+        local q = self:snapc(e.n[1])
+        if q ~= e.n[1] and abs(q - e.n[1]) <= 2 then e.n[1] = q end
+      end
+    end
+  end
+  for i = #flat, w + 1, -1 do flat[i] = nil end
+  local rhm = self.rhm
+  for i = 1, bl do rhm[i] = 0 end
+  self:hands(flat, pos, cad, rhm)
+end
+
 function G:advance()
   self.tick = self.tick + 1
   if self.tick >= self.bl then
@@ -1173,18 +1360,26 @@ end
 function G:reset()
   self.bar, self.tick, self.div = 0, 0, 0
   self.res, self.conseq = nil, false
-  self.bdyn, self.barn, self.choff = 0, 0, 0
+  self.bdyn, self.barn, self.choff, self.vn = 0, 0, 0, 0
   self.lastsil, self.melsil, self.resting, self.newchord = false, false, false, true
   for i = #self.sflat, 1, -1 do self.sflat[i] = nil end
   for i = #self.flat, 1, -1 do self.flat[i] = nil end
   for i = #self.prev, 1, -1 do self.prev[i] = nil end
 end
 
-function G:shape_for(base)
+function G:shape_for(pr)
+  local base = pr[2]
   if self.plane then return base end
   local w, w0 = self.wb, self.wb0
   local ns = #T.SHAPES
   local bt = clamp(self.bn * 0.55 + self.cx * 0.3, -0.7, 0.9)
+  local hm = self.p.harm or 0.35
+  -- a chord should come back wearing the same colour each time round the
+  -- progression. Re-rolling the voicing every cycle made the harmony sound
+  -- reshuffled rather than composed.
+  if pr[3] and abs((pr[4] or 9) - bt) < 0.08 and abs((pr[5] or 9) - hm) < 0.08 then
+    return pr[3]
+  end
   if bt ~= self.wbt then
     self.wbt = bt
     for j = 1, ns do
@@ -1193,13 +1388,22 @@ function G:shape_for(base)
     end
   end
   local set = self.shset
-  for j = 1, ns do w[j] = w0[j] end
+  -- harmony leans the shape choice toward extended chords (high) or bare
+  -- triads and dyads (low). This is its main per-bar audible effect.
+  local hm = (self.p.harm or 0.35) - 0.4
+  for j = 1, ns do
+    local f = 1 + (T.SHAPES[j].n - 3) * hm * 1.15
+    if f < 0.06 then f = 0.06 end
+    w[j] = w0[j] * f
+  end
   if w[base] then w[base] = w[base] * 3.2 end
   if set then
     for j = 1, ns do w[j] = w[j] * 0.002 end
     for i = 1, #set do w[set[i]] = w[set[i]] * 900 end
   end
-  return T.wpick(w, ns)
+  local r = T.wpick(w, ns)
+  pr[3], pr[4], pr[5] = r, bt, hm
+  return r
 end
 
 function G:build_prog(style)
@@ -1275,7 +1479,7 @@ function G:reroll(chaos)
     sd = sd and sd.d
     if sd then
       local function j(v, a) return clamp(v + (random() - 0.5) * 2 * a, 0, 1) end
-      p.bright = clamp(sd.mode + ({-1,0,0,0,1})[random(5)], -5, 2)
+      p.bright = clamp(sd.mode + ({-1,0,0,0,1})[random(5)], -5, 3)
       p.space = j(sd.space, 0.16)
       p.motion = j(sd.motion, 0.13)
       p.syn = sd.syn > 0.02 and j(sd.syn, 0.14) or (random() < 0.25 and random() * 0.12 or 0)
@@ -1288,8 +1492,8 @@ function G:reroll(chaos)
       p.swing = sd.swing > 0.02 and j(sd.swing, 0.1) or 0
       p.hum = j(sd.hum, 0.13)
     else
-      local mm = -5.2 + random() * 7.4
-      p.bright = clamp(random() < 0.72 and floor(mm + 0.5) or mm, -5, 2)
+      local mm = -5.2 + random() * 8.4
+      p.bright = clamp(random() < 0.72 and floor(mm + 0.5) or mm, -5, 3)
       p.space = 0.05 + random() * 0.7
       p.motion = 0.2 + random() * 0.7
       p.syn = random() < 0.45 and random() * 0.7 or 0
@@ -1451,8 +1655,15 @@ end
 
 function G:info()
   local b = floor(self.bcont + 0.5)
-  if b > 3 then b = 3 elseif b < -6 then b = -6 end
-  return T.PC[self.root + 1], (T.MODE[b] or "?") .. T.INFL[self.infl + 1], self.qual,
+  if b > 3 then b = 3 elseif b < -5 then b = -5 end
+  -- cached: redraw calls this every frame and the concatenation was
+  -- allocating a fresh string each time for something that changes rarely.
+  local k = b * 100 + self.infl
+  if k ~= self.ikey then
+    self.ikey = k
+    self.iname = (T.MODE[b] or "?") .. T.INFL[self.infl + 1]
+  end
+  return T.PC[self.root + 1], self.iname, self.qual,
          self.lhon and self.lhpat.n or "solo"
 end
 

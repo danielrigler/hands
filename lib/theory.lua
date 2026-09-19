@@ -95,6 +95,8 @@ T.SHAPES = {
   {b = 0.24, o = {0,4,9}},
 }
 
+for i = 1, #T.SHAPES do T.SHAPES[i].n = #T.SHAPES[i].o end
+
 T.CLASSIC = {
   {0.05,0.15,0.05,0.25,0.30,0.18,0.02},
   {0.03,0.10,0.01,0.06,0.60,0.03,0.17},
@@ -116,59 +118,92 @@ T.TEND[2] = {1, 1.5}
 
 T.OCTS = {0,12,-12,12,7,5,-5,12,-12,4}
 
-T.SNAMES = {"free","A","B","C","D","E","F","G","H","I","J"}
+-- index 1 is "free" (no preset); the rest line up with T.STYLE below
+T.SNAMES = {"free", "invention", "sonatina", "nocturne", "reverie", "swing",
+            "minimal", "ambient", "ballad", "groove", "etude",
+            "waltz", "chorale", "blues", "toccata", "parlour"}
 
 T.STYLE = {
   {bl=16, bps=4, hr=1, ps=2, oct=0.4, mb=0, at=0,
-   sh={1,2,8}, lh={9,12,14,4}, inf={0},
+   sh={1,2,8}, lh={9,12,14,4,1}, inf={0},
    d={pace=96, motion=0.85, space=0.08, syn=0.05, rep=0.5, len=0.75, swing=0,
       pedal=0.12, hum=0.15, rubato=0.05, harm=0.75, left=0.72, right=0.5,
       mode=0, reso=0, drift=0.05, tens=0.30, rngw=40}},
   {bl=16, bps=4, hr=1, ps=1, oct=0.6, mb=0, at=0,
-   sh={1,2}, lh={8,5,4,6}, inf={0},
+   sh={1,2}, lh={8,5,4,6,1,12}, inf={0},
    d={pace=126, motion=0.7, space=0.22, syn=0.05, rep=0.62, len=0.5, swing=0,
       pedal=0.32, hum=0.18, rubato=0.12, harm=1.0, left=0.52, right=0.38,
       mode=0, reso=0, drift=0.08, tens=0.28, rngw=46}},
   {bl=16, bps=4, hr=1, ps=1, oct=1.0, at=0,
-   sh={1,2,3,9}, lh={9,7,12,6}, inf={0,1},
+   sh={1,2,3,9}, lh={9,7,12,6,2}, inf={0,1},
    d={pace=64, motion=0.55, space=0.3, syn=0.1, rep=0.4, len=0.85, swing=0,
       pedal=0.92, hum=0.3, rubato=0.8, harm=0.6, left=0.66, right=0.62,
       mode=-2, reso=0, drift=0.25, tens=0.55, rngw=62}},
   {bl=12, bps=4, hr=2, ps=6, oct=0.8,
-   sh={3,6,11,13,7}, lh={6,7,2,9}, inf={3,4},
+   sh={3,6,11,13,7}, lh={6,7,2,9,13}, inf={3,4},
    d={pace=58, motion=0.45, space=0.38, syn=0.04, rep=0.62, len=0.95, swing=0,
       pedal=1.0, hum=0.16, rubato=0.45, harm=0.06, left=0.42, right=0.3,
       mode=1, reso=0, drift=0.22, tens=0.2, rngw=54}},
   {bl=16, bps=4, hr=1, ps=7, oct=0.6,
-   sh={2,3,13,6,9}, lh={15,17,1}, inf={1,2},
+   sh={2,3,13,6,9}, lh={15,17,1,9,12}, inf={1,2},
    d={pace=76, motion=0.68, space=0.28, syn=0.38, rep=0.45, len=0.6, swing=0.55,
       pedal=0.4, hum=0.26, rubato=0.5, harm=0.9, left=0.5, right=0.55,
       mode=-2, reso=0, drift=0.15, tens=0.55, rngw=46}},
   {bl=16, bps=4, hr=4, ps=3, oct=0.3, mb=0, at=0,
-   sh={1,2,10}, lh={10,12,13,14}, inf={0},
+   sh={1,2,10}, lh={10,12,13,14,1,16}, inf={0},
    d={pace=126, motion=0.9, space=0.05, syn=0.15, rep=0.95, len=0.45, swing=0,
       pedal=0.35, hum=0.06, rubato=0, harm=0.12, left=0.85, right=0.14,
       mode=0, reso=0, drift=0.04, tens=0.12, rngw=44}},
   {bl=16, bps=4, hr=4, ps=5, oct=0.5,
-   sh={10,4,3,14,5}, lh={1,2,3}, inf={0,3,4},
+   sh={10,4,3,14,5}, lh={1,2,3,7,10,12}, inf={0,3,4},
    d={pace=13, motion=0.15, space=0.55, syn=0, rep=0.6, len=1.0, swing=0,
       pedal=1.0, hum=0.22, rubato=0.55, harm=0.04, left=0.2, right=0.22,
       mode=1, reso=0, drift=0.6, tens=0.10, rngw=56}},
   {bl=16, bps=4, hr=1, ps=7, oct=0.4,
-   sh={2,3,13,6}, lh={15,1,17}, inf={2},
-   d={pace=80, motion=0.55, space=0.42, syn=0.42, rep=0.8, len=0.6, swing=0.6,
-      pedal=0.55, hum=0.3, rubato=0.62, harm=0.35, left=0.46, right=0.34,
+   sh={2,3,13,6}, lh={15,1,17,9,12}, inf={2},
+   d={pace=62, motion=0.42, space=0.44, syn=0.34, rep=0.8, len=0.75, swing=0.6,
+      pedal=0.62, hum=0.3, rubato=0.72, harm=0.35, left=0.46, right=0.3,
       mode=-2, reso=0, drift=0.12, tens=0.42, rngw=44}},
   {bl=16, bps=4, hr=2, ps=3, oct=0.4, mb=0,
-   sh={2,3,13}, lh={16,11,10}, inf={0},
+   sh={2,3,13}, lh={16,11,10,1,14}, inf={0},
    d={pace=123, motion=0.75, space=0.22, syn=0.65, rep=0.85, len=0.35, swing=0.08,
       pedal=0.3, hum=0.15, rubato=0.06, harm=0.28, left=0.6, right=0.3,
       mode=-3, reso=0, drift=0.05, tens=0.30, rngw=46}},
   {bl=16, bps=4, hr=2, ps=1, oct=0.5, mb=0, at=0,
-   sh={1,2,10}, lh={12,13,10}, inf={0},
+   sh={1,2,10}, lh={12,13,10,1,7,8}, inf={0},
    d={pace=104, motion=0.95, space=0.05, syn=0.1, rep=0.9, len=0.3, swing=0,
       pedal=0.28, hum=0.04, rubato=0, harm=0.5, left=0.92, right=0.28,
       mode=-3, reso=0, drift=0.04, tens=0.20, rngw=48}},
+  -- waltz: three to a bar, oom-pah-pah, plain triads, salon tempo
+  {bl=12, bps=4, hr=1, ps=1, oct=0.5, mb=0, at=0,
+   sh={1,2,8}, lh={6,5,2,8,12}, inf={0},
+   d={pace=150, motion=0.7, space=0.15, syn=0.02, rep=0.55, len=0.6, swing=0,
+      pedal=0.5, hum=0.14, rubato=0.18, harm=0.85, left=0.5, right=0.4,
+      mode=0, reso=0, drift=0.06, tens=0.25, rngw=44}},
+  -- chorale: slow block harmony, everything sustained, a singing top line
+  {bl=16, bps=4, hr=1, ps=7, oct=0.2, mb=0, at=0,
+   sh={1,2,7}, lh={1,2,17,9,12}, inf={0},
+   d={pace=52, motion=0.22, space=0.18, syn=0, rep=0.45, len=1.0, swing=0,
+      pedal=0.55, hum=0.12, rubato=0.25, harm=1.0, left=0.3, right=0.15,
+      mode=0, reso=0, drift=0.04, tens=0.15, rngw=50}},
+  -- blues: mixolydian with the blue inflection, shells and comping
+  {bl=16, bps=4, hr=2, ps=7, oct=0.5, at=0,
+   sh={2,3,6,13}, lh={17,15,4,9,12}, inf={2},
+   d={pace=84, motion=0.6, space=0.3, syn=0.35, rep=0.7, len=0.5, swing=0.6,
+      pedal=0.3, hum=0.28, rubato=0.35, harm=0.7, left=0.55, right=0.5,
+      mode=-1, reso=0, drift=0.08, tens=0.6, rngw=46}},
+  -- toccata: relentless, dry, both hands running
+  {bl=16, bps=4, hr=2, ps=2, oct=0.7, mb=0, at=0,
+   sh={1,2,10}, lh={14,12,13,10,7,1}, inf={0,1},
+   d={pace=168, motion=1.0, space=0.02, syn=0.08, rep=0.85, len=0.25, swing=0,
+      pedal=0.12, hum=0.05, rubato=0, harm=0.6, left=0.88, right=0.35,
+      mode=-3, reso=0, drift=0.03, tens=0.35, rngw=52}},
+  -- parlour: a slow minor vamp under a spare, rubato melody
+  {bl=16, bps=4, hr=1, ps=3, oct=0.3,
+   sh={2,3,9,13}, lh={5,4,2,8,12}, inf={1,2},
+   d={pace=70, motion=0.35, space=0.42, syn=0.05, rep=0.62, len=0.85, swing=0,
+      pedal=0.7, hum=0.2, rubato=0.6, harm=0.12, left=0.4, right=0.22,
+      mode=-3, reso=0, drift=0.12, tens=0.35, rngw=48}},
 }
 T.BLOOM = {12,7,19,-12,5,12,16,24,-5,9,7,14,19,-12,12,7}
 T.HSTEP = {1,-1,1,-1,1,-1,1,-1,1,-1,1,-1,2,-2,2,-3}
@@ -212,12 +247,12 @@ T.LH = {
       local k = s % 8
       return k < 5 and k + 1 or 9 - k end},
   {n = "rush",    a = 3, f = function(s,b,u,nb) return s % 3 + 1 end},
-  {n = "comp",    a = -1, f = function(s,b,u,nb)
+  {n = "comp",    a = 1, f = function(s,b,u,nb)
       local k = s % 8
       return (k == 3 or k == 6) and -1 or 0 end},
-  {n = "stab",    a = -1, f = function(s,b,u,nb)
+  {n = "stab",    a = 1, f = function(s,b,u,nb)
       return (s % 4 == 2) and -1 or 0 end},
-  {n = "shell",   a = -1, f = function(s,b,u,nb)
+  {n = "shell",   a = 1, f = function(s,b,u,nb)
       if s % 8 == 0 then return 1 end
       return (s % 8 == 5) and -1 or 0 end},
 }

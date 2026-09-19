@@ -1,7 +1,7 @@
 --
 --
 --
---          hands v0.01
+--          hands v0.05
 --           @dddstudio
 --
 --
@@ -12,7 +12,11 @@
 -- K2 vary
 -- K3 new piece
 -- K1+K2 run/stop
--- K1+K3 randomize all 
+-- K1+K3 randomize all
+--
+-- free running by default;
+-- params > clock to follow
+-- the norns tempo
 
 local Gen = include('lib/gen')
 local T = include('lib/theory')
@@ -42,8 +46,10 @@ local function nval(v)
 end
 
 local PAGES = {
-  {"style", {"style", "style", function(v) return T.SNAMES[floor(v + 0.5)] or "?" end},
-            {"pace", "pace", function(v) return floor(v + 0.5) .. "bpm" end, 0.4}},
+  {"style", {"style", "", function(v) return T.SNAMES[floor(v + 0.5)] or "?" end},
+            {"pace", "pace", function(v)
+              if synced then return floor(clock.get_tempo() + 0.5) .. " syn" end
+              return floor(v + 0.5) .. "bpm" end, 0.4}},
   {"time",  {"swing", "swing", pct},
             {"hum", "human", pct}},
   {"flow",  {"motion", "motion", nval},
@@ -53,9 +59,8 @@ local PAGES = {
   {"touch", {"len", "length", pct},
             {"pedal", "pedal", pct}},
   {"tone",  {"mode", "mode", T.mode_label},
-            {"reg", "register", function(v)
-              return nname(gen and gen.cbase or v) end}},
-  {"hands", {"left", "left", function() return gen and select(4, gen:info()) or "-" end},
+            {"reg", "register", nname}},
+  {"hands", {"left", function() return gen and select(4, gen:info()) or "left" end, pct},
             {"right", "right", pct}},
   {"feel",  {"rubato", "rubato", pct},
             {"tens", "tension", pct}},
@@ -85,6 +90,28 @@ local ctick = 0
 local hist, hn = {}, 0
 local HL = 224
 local devs = {}
+local epoch = 0
+local drift_clk, rdm
+local hdr, hdr_r, hdr_m = "", nil, nil
+local toast, toast_t = nil, 0
+local TOAST = 0.85
+local synced, sdiv, follow = false, 0.25, true
+
+local function beatsec()
+  if clock.get_beat_sec then return clock.get_beat_sec() end
+  return 60 / clock.get_tempo()
+end
+
+local function say(t)
+  toast = t
+  toast_t = util.time() + TOAST
+  sdirty = true
+end
+
+-- every voice/echo/pedal coroutine captures the epoch it started in.
+-- panic() bumps it, so anything still in flight abandons instead of
+-- sounding notes after a stop.
+local function playing(ep) return running and ep == epoch end
 
 local function steal()
   local bk, bs = nil, 1e18
@@ -102,7 +129,7 @@ local function non(n, v, chn, hold)
   local c = own[k]
   if c then
     own[k] = c + 1
-    if hold then return end
+    if hold then nser = nser + 1; oc[k] = nser; return end
     md:note_off(n, 0, chn)
   else
     while nheld >= poly do if not steal() then break end end
@@ -131,16 +158,19 @@ local function pcc(v)
   if lch ~= ch then md:cc(64, v, lch) end
 end
 
-local function repedal(hold)
+local function repedal(hold, ep)
   pcc(0)
-  if hold <= 0 then return end
+  if hold <= 0 or not playing(ep) then return end
   clock.sleep(0.04)
+  if not playing(ep) then return end
   pcc(127)
   clock.sleep(hold)
   pcc(0)
 end
 
 local function panic()
+  epoch = epoch + 1
+  if pedco then clock.cancel(pedco); pedco = nil end
   if pedcc then pcc(0) end
   for k in pairs(own) do md:note_off(k % 200, 0, k // 200) end
   for k in pairs(own) do own[k] = nil end
@@ -160,25 +190,27 @@ local function log(e)
   for j = 1, c do h[j] = e.n[j] end
 end
 
-local function echo(n, v, chn, dly, dur)
+local function echo(n, v, chn, dly, dur, ep)
   clock.sleep(dly)
-  if not running then return end
+  if not playing(ep) then return end
   non(n, v, chn, true)
   clock.sleep(dur)
   noff(n, chn)
 end
 
 local function voice(e)
+  local ep = epoch
   local chn = (e.h == 1) and lch or ch
   if e.o > 0 then
     clock.sleep(e.o * step_sec)
-    if not running then return end
+    if not playing(ep) then return end
   end
   local n = e.n
   local cnt = #n
   if e.r > 1 then
     local sub = e.d * step_sec / e.r
     for j = 1, e.r do
+      if not playing(ep) then return end
       non(n[1], max(1, e.v - (j - 1) * 9), chn)
       clock.sleep(sub * 0.72)
       noff(n[1], chn)
@@ -192,6 +224,7 @@ local function voice(e)
   local vs = e.vs
   if st > 0 and cnt > 1 then
     for i = 1, cnt do
+      if not playing(ep) then break end
       non(n[i], vs and vs[i] or e.v, chn, hold)
       if i < cnt then clock.sleep(st) end
     end
@@ -205,7 +238,7 @@ local function voice(e)
     for i = 1, #b do
       v = max(30, floor(v * (0.74 + 0.14 * rs)))
       d = d + 0.12 + random() * step_sec * (1.1 + 3.2 * rs)
-      clock.run(echo, b[i], v, chn, d, min(90, dur * (0.5 + random() * 0.55)))
+      clock.run(echo, b[i], v, chn, d, min(90, dur * (0.5 + random() * 0.55)), ep)
     end
   end
   clock.sleep(max(0.03, dur - (st > 0 and st * (cnt - 1) or 0)))
@@ -213,6 +246,7 @@ local function voice(e)
 end
 
 local function tick()
+  if synced then clock.sync(1) end
   tlast = util.time()
   while true do
     if gen.tick == 0 then
@@ -223,7 +257,7 @@ local function tick()
       if pedcc and gen.newchord and gen.barn > 0 then
         if pedco then clock.cancel(pedco) end
         pedco = clock.run(repedal,
-          max(0, p.pedal - 0.5) * 2 * gen.hr * gen.bl * step_sec * 0.94 - 0.04)
+          max(0, p.pedal - 0.5) * 2 * gen.hr * gen.bl * step_sec * 0.94 - 0.04, epoch)
       end
     end
     local l = gen.ev[gen.tick + 1]
@@ -238,11 +272,43 @@ local function tick()
     local even = gen.tick % 2 == 0
     gen:advance()
     local f = p.swing / 3
-    slen = step_sec * (even and (1 + f) or (1 - f))
-    clock.sleep(slen)
+    if synced then
+      -- follow the norns tempo live, and re-derive if it has moved enough
+      -- to change how dense a bar should be
+      local st = beatsec() * sdiv
+      if math.abs(st - step_sec) > step_sec * 0.02 then
+        step_sec = st
+        p.step = st
+        dirty = true
+      end
+      slen = step_sec * (even and (1 + f) or (1 - f))
+      -- land on the grid, then push the off-steps late by hand so swing
+      -- survives being locked to the clock
+      clock.sync(sdiv)
+      if even and f > 0.001 then clock.sleep(step_sec * f) end
+    else
+      slen = step_sec * (even and (1 + f) or (1 - f))
+      clock.sleep(slen)
+    end
     gstep = gstep + 1
     tlast = util.time()
   end
+end
+
+local function stop_seq()
+  if not running then return end
+  running = false
+  if seq then clock.cancel(seq); seq = nil end
+  panic()
+  sdirty = true
+end
+
+local function start_seq(fromtop)
+  if running then return end
+  if fromtop and gen then gen:reset() end
+  running = true
+  seq = clock.run(tick)
+  sdirty = true
 end
 
 local function drifter()
@@ -267,9 +333,13 @@ function init()
   params:add_separator("act", "")
   
   params:add_trigger("newp", "New Piece")
-  params:set_action("newp", function() if gen then gen:reroll(false); sdirty = true end end)
+  params:set_action("newp", function()
+    if gen then gen:reroll(false); say("new piece") end
+  end)
   params:add_trigger("vary", "Vary")
-  params:set_action("vary", function() if gen then gen:mutate(); sdirty = true end end)
+  params:set_action("vary", function()
+    if gen then gen:mutate(); say("vary") end
+  end)
   params:add_trigger("chaos", "Randomize All")
   params:set_action("chaos", function()
     if not gen then return end
@@ -308,7 +378,7 @@ function init()
     params:set("harm", p.harm, true)
     params:set("swing", p.swing, true)
     params:set("hum", p.hum, true)
-    sdirty = true
+    say("randomize")
   end)
 
   params:add_separator("sett", "")
@@ -332,7 +402,10 @@ function init()
   params:add_number("rngw", "range", 14, 74, 48)
   params:set_action("rngw", function(v) p.rngw = v; dirty = true end)
   params:add_control("pace", "pace", cs.new(6, 200, 'exp', 0, 30, "bpm"))
-  params:set_action("pace", function(v) step_sec = 15 / v; p.step = step_sec; dirty = true end)
+  params:set_action("pace", function(v)
+    if not synced then step_sec = 15 / v; p.step = step_sec end
+    dirty = true
+  end)
   params:add_control("space", "space", cs.new(0, 1, 'lin', 0, 0.35))
   params:set_action("space", function(v) p.space = v; dirty = true end)
   params:add_control("motion", "motion", cs.new(0, 1, 'lin', 0, 0.6))
@@ -345,7 +418,7 @@ function init()
   params:set_action("len", function(v) p.len = v; dirty = true end)
   params:add_control("tens", "tension", cs.new(0, 1, 'lin', 0, 0.35))
   params:set_action("tens", function(v) p.tens = v; dirty = true end)
-  params:add_control("mode", "mode", cs.new(-5, 2, 'lin', 0, 0))
+  params:add_control("mode", "mode", cs.new(-5, 3, 'lin', 0, 0))
   params:set_action("mode", function(v) p.bright = v; dirty = true end)
   params:add_number("reg", "register", 40, 92, 66)
   params:set_action("reg", function(v) p.centre = v; dirty = true end)
@@ -355,8 +428,12 @@ function init()
   params:set_action("right", function(v) p.rh = v; dirty = true end)
   params:add_control("harm", "harmony", cs.new(0, 1, 'lin', 0, 0.35))
   params:set_action("harm", function(v)
-    if gen and math.abs(v - p.harm) > 0.18 then gen:build_prog(random(5)) end
+    -- no dead zone: small turns change chord richness immediately, and the
+    -- progression is rebuilt at the next section boundary rather than
+    -- yanked mid-phrase.
+    if gen and math.abs(v - p.harm) > 0.06 then gen.progdirty = true end
     p.harm = v
+    dirty = true
   end)
   params:add_control("drift", "drift", cs.new(0, 1, 'lin', 0, 0.3))
   params:set_action("drift", function(v) p.drift = v; dirty = true end)
@@ -373,6 +450,24 @@ function init()
   params:add_control("reso", "resonance", cs.new(0, 1, 'lin', 0, 0))
   params:set_action("reso", function(v) p.reso = v; dirty = true end)
 
+
+  params:add_group("Clock", 3)
+  params:add_option("sync", "tempo", {"free running", "norns clock"}, 1)
+  params:set_action("sync", function(v)
+    synced = v == 2
+    step_sec = synced and (beatsec() * sdiv) or (15 / params:get("pace"))
+    p.step = step_sec
+    dirty = true
+    sdirty = true
+  end)
+  params:add_option("tdiv", "step", {"1/32", "1/16", "1/8", "1/4"}, 2)
+  params:set_action("tdiv", function(v)
+    sdiv = ({0.125, 0.25, 0.5, 1})[v]
+    if synced then step_sec = beatsec() * sdiv; p.step = step_sec; dirty = true end
+    sdirty = true
+  end)
+  params:add_binary("xport", "follow transport", "toggle", 1)
+  params:set_action("xport", function(v) follow = v == 1 end)
 
   params:add_group("Output", 6)
   params:add_option("dev", "midi device", devs, 1)
@@ -406,18 +501,26 @@ function init()
 
   gen = Gen.new(p)
   params:bang()
-  gen:derive(); gen:update_scale(); gen:update_lut(); gen:reroll(false)
+  gen:derive(); gen:reroll(false)
   seq = clock.run(tick)
-  clock.run(drifter)
+  drift_clk = clock.run(drifter)
 
-  local rd = metro.init()
-  rd.event = function() if running or sdirty then sdirty = false; redraw() end end
-  rd:start(1 / 15)
+  rdm = metro.init()
+  rdm.event = function()
+    if running or sdirty or toast or alt then sdirty = false; redraw() end
+  end
+  rdm:start(1 / 15)
 
   upd = Update:new{name = "hands", on_change = function() sdirty = true end}
   clock.run(function() clock.sleep(2); upd:check() end)
 
-  function midi.add() build_devs(); _menu.rebuild_params() end
+  clock.transport.start = function() if follow and synced then start_seq(true) end end
+  clock.transport.stop = function() if follow and synced then stop_seq() end end
+
+  function midi.add()
+    build_devs()
+    if _menu and _menu.rebuild_params then _menu.rebuild_params() end
+  end
   function midi.remove() clock.run(function() clock.sleep(0.2); build_devs() end) end
 end
 
@@ -441,8 +544,8 @@ function key(n, z)
   if z == 0 then return end
   if n == 2 then
     if alt then
-      running = not running
-      if running then seq = clock.run(tick) else clock.cancel(seq); panic() end
+      if running then stop_seq() else start_seq(false) end
+      say(running and "run" or "stop")
     else
       params:set("vary", 1)
     end
@@ -467,12 +570,16 @@ local function cell(x, w, nm, val, v)
   screen.fill()
 end
 
+-- ask the parameter itself how far along its range it sits. Hardcoding this
+-- got 'pace' wrong, because its controlspec is exponential and the bar was
+-- drawn linearly.
+local PP = {}
 local function nrm(id, v)
-  if id == "pace" then return (v - 6) / 194
-  elseif id == "mode" then return (v + 5) / 7
-  elseif id == "style" then return (v - 1) / 10
-  elseif id == "reg" then return (v - 40) / 52
-  end
+  local pp = PP[id]
+  if not pp then pp = params:lookup_param(id); PP[id] = pp end
+  if pp.raw then return pp.raw end
+  if pp.options then return (v - 1) / max(1, #pp.options - 1) end
+  if pp.min and pp.max and pp.max > pp.min then return (v - pp.min) / (pp.max - pp.min) end
   return v
 end
 
@@ -482,9 +589,10 @@ function redraw()
   screen.aa(0)
   local rt, mo, q = gen:info()
 
+  if rt ~= hdr_r or mo ~= hdr_m then hdr_r, hdr_m, hdr = rt, mo, rt .. " " .. mo end
   screen.level(15)
   screen.move(0, 6)
-  screen.text(rt .. " " .. mo)
+  screen.text(hdr)
   screen.level(running and 4 or 15)
   screen.move(128, 6)
   screen.text_right(running and q or "stop")
@@ -496,15 +604,20 @@ function redraw()
   local lo, hi = gen.lo, gen.hi
   local sp = 32 / max(1, hi - lo)
   local alo, ahi, blo, bhi = 127, 0, 127, 0
+  -- only notes still on screen. Scanning the whole ring meant the range
+  -- converged on the all-time min/max and the shading stopped moving.
   for i = 1, HL do
     local h = hist[i]
     if h and h.n then
-      if h.h == 1 then
-        if h.v < blo then blo = h.v end
-        if h.v > bhi then bhi = h.v end
-      else
-        if h.v < alo then alo = h.v end
-        if h.v > ahi then ahi = h.v end
+      local age = ph - h.s
+      if age >= 0 and age <= 43 then
+        if h.h == 1 then
+          if h.v < blo then blo = h.v end
+          if h.v > bhi then bhi = h.v end
+        else
+          if h.v < alo then alo = h.v end
+          if h.v > ahi then ahi = h.v end
+        end
       end
     end
   end
@@ -561,16 +674,43 @@ function redraw()
   local pg = PAGES[page]
   local a, b = pg[2], pg[3]
   local av, bv = params:get(a[1]), params:get(b[1])
-  cell(0, 61, a[2], a[3](av), nrm(a[1], av))
+  cell(0, 61, type(a[2]) == "function" and a[2]() or a[2], a[3](av), nrm(a[1], av))
   screen.level(1)
   screen.move(64.5, 51)
   screen.line(64.5, 62)
   screen.stroke()
-  cell(67, 61, b[2], b[3](bv), nrm(b[1], bv))
+  cell(67, 61, type(b[2]) == "function" and b[2]() or b[2], b[3](bv), nrm(b[1], bv))
+
+  local msg
+  if toast then
+    if util.time() < toast_t then msg = toast else toast = nil end
+  end
+  -- holding K1 shows what the combos will do rather than making you recall it
+  if not msg and alt then msg = (running and "k2 stop" or "k2 run") .. "    k3 randomize" end
+  if msg then
+    local w = (screen.text_extents and screen.text_extents(msg) or #msg * 4) + 12
+    if w > 126 then w = 126 end
+    local x = floor((128 - w) / 2)
+    screen.level(0)
+    screen.rect(x, 17, w, 14)
+    screen.fill()
+    screen.level(4)
+    screen.rect(x + 0.5, 17.5, w - 1, 13)
+    screen.stroke()
+    screen.level(15)
+    screen.move(x + w / 2, 26)
+    screen.text_center(msg)
+  end
 
   screen.update()
 end
 
 function cleanup()
+  clock.transport.start = function() end
+  clock.transport.stop = function() end
+  running = false
+  if seq then clock.cancel(seq); seq = nil end
+  if drift_clk then clock.cancel(drift_clk); drift_clk = nil end
+  if rdm then rdm:stop() end
   panic()
 end
