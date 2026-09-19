@@ -118,7 +118,6 @@ T.TEND[2] = {1, 1.5}
 
 T.OCTS = {0,12,-12,12,7,5,-5,12,-12,4}
 
--- index 1 is "free" (no preset); the rest line up with T.STYLE below
 T.SNAMES = {"free", "invention", "sonatina", "nocturne", "reverie", "swing",
             "minimal", "ambient", "ballad", "groove", "etude",
             "waltz", "chorale", "blues", "toccata", "parlour"}
@@ -174,31 +173,26 @@ T.STYLE = {
    d={pace=104, motion=0.95, space=0.05, syn=0.1, rep=0.9, len=0.3, swing=0,
       pedal=0.28, hum=0.04, rubato=0, harm=0.5, left=0.92, right=0.28,
       mode=-3, reso=0, drift=0.04, tens=0.20, rngw=48}},
-  -- waltz: three to a bar, oom-pah-pah, plain triads, salon tempo
   {bl=12, bps=4, hr=1, ps=1, oct=0.5, mb=0, at=0,
    sh={1,2,8}, lh={6,5,2,8,12}, inf={0},
    d={pace=150, motion=0.7, space=0.15, syn=0.02, rep=0.55, len=0.6, swing=0,
       pedal=0.5, hum=0.14, rubato=0.18, harm=0.85, left=0.5, right=0.4,
       mode=0, reso=0, drift=0.06, tens=0.25, rngw=44}},
-  -- chorale: slow block harmony, everything sustained, a singing top line
   {bl=16, bps=4, hr=1, ps=7, oct=0.2, mb=0, at=0,
    sh={1,2,7}, lh={1,2,17,9,12}, inf={0},
    d={pace=52, motion=0.22, space=0.18, syn=0, rep=0.45, len=1.0, swing=0,
       pedal=0.55, hum=0.12, rubato=0.25, harm=1.0, left=0.3, right=0.15,
       mode=0, reso=0, drift=0.04, tens=0.15, rngw=50}},
-  -- blues: mixolydian with the blue inflection, shells and comping
   {bl=16, bps=4, hr=2, ps=7, oct=0.5, at=0,
    sh={2,3,6,13}, lh={17,15,4,9,12}, inf={2},
    d={pace=84, motion=0.6, space=0.3, syn=0.35, rep=0.7, len=0.5, swing=0.6,
       pedal=0.3, hum=0.28, rubato=0.35, harm=0.7, left=0.55, right=0.5,
       mode=-1, reso=0, drift=0.08, tens=0.6, rngw=46}},
-  -- toccata: relentless, dry, both hands running
   {bl=16, bps=4, hr=2, ps=2, oct=0.7, mb=0, at=0,
    sh={1,2,10}, lh={14,12,13,10,7,1}, inf={0,1},
    d={pace=168, motion=1.0, space=0.02, syn=0.08, rep=0.85, len=0.25, swing=0,
       pedal=0.12, hum=0.05, rubato=0, harm=0.6, left=0.88, right=0.35,
       mode=-3, reso=0, drift=0.03, tens=0.35, rngw=52}},
-  -- parlour: a slow minor vamp under a spare, rubato melody
   {bl=16, bps=4, hr=1, ps=3, oct=0.3,
    sh={2,3,9,13}, lh={5,4,2,8,12}, inf={1,2},
    d={pace=70, motion=0.35, space=0.42, syn=0.05, rep=0.62, len=0.85, swing=0,

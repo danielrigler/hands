@@ -87,11 +87,8 @@ function G:derive()
   self.orn = clamp(rh * 0.85 + (sl - 1) * 0.15, 0, 0.9)
   self.ratch = max(0, rh - 0.65) * 1.4
   self.app = (0.06 + self.song * 0.28) * (0.35 + 1.3 * (p.tens or 0.35))
-  -- without this the line was a pure random walk of seconds
   self.leapp = clamp(0.10 + 0.15 * self.song + 0.10 * self.cx, 0, 0.36)
   local rp = p.rep or 0.45
-  -- curved so the low half keeps the old sparse feel and the top of the
-  -- range reaches genuine bar-for-bar repetition
   self.rep = clamp(rp ^ 1.7 * 1.1 + (0.12 - 0.24 * rh), 0, 0.97)
   self.tvar = clamp(1.3 - rp * 1.5, 0.05, 1)
   self.freeb = clamp(0.85 - rp * 0.8, 0.05, 1)
@@ -102,8 +99,6 @@ function G:derive()
   self.legato = clamp(0.12 + (p.len or 0.55) * 0.86, 0.05, 0.99)
   self.artbase = clamp(0.45 + (p.len or 0.55) * 0.8, 0.4, 1.3)
   local tn = p.tens or 0.35
-  -- most bars come from the motif path, so tension needs a hand in it:
-  -- above the midpoint the line starts leaning on chromatic neighbours
   self.chrom = clamp((tn - 0.4) * 0.6, 0, 0.36)
   self.lock = clamp(2.5 - tn * 2.3 - 0.5 * self.cx, 0.25, 2.6)
   self.pull = 0.28 + tn * 0.5
@@ -138,9 +133,6 @@ function G:build_secpat()
       for i = 1, #ls do
         for j = 1, #g do if g[j] == ls[i] then k[#k+1] = ls[i] end end
       end
-      -- if the style has no pattern at this activity level, keep the level
-      -- and drop the style filter. Falling back to the whole style set
-      -- instead made p.lh a no-op for several styles.
       if #k > 0 then g = k end
     end
     sp[slot] = g[(self.lhseed + slot * 3) % #g + 1]
@@ -291,8 +283,6 @@ function G:update_lut()
   local vp = 3.2 + 24 * cx * cx
   local vr = (15 + 34 * cx) * (1 + 0.32 * self.bn) * (0.5 + (self.p.rngw or 48) / 64)
   local pw, rw, pwl = self.pw, self.rw, self.pwl
-  -- vl is deliberately wide and notched near zero: when the line is asked to
-  -- leap it has to actually leap, not drift by a step.
   local vl = 30 + 46 * cx
   for d = -24, 24 do
     local q = d * d
@@ -347,9 +337,6 @@ function G:build_chord(deg, shi)
   self:voice_chord()
 end
 
--- how far apart two adjacent voices have to sit before the register turns
--- them to mud. Close thirds are fine at the top of the staff and awful an
--- octave below the bass clef.
 local function minint(n)
   if n < 40 then return 12
   elseif n < 47 then return 7
@@ -359,19 +346,11 @@ local function minint(n)
   return 2
 end
 
--- Lay the chord out the way a player would: root in the bass, then each
--- upper tone taken to whichever octave sits nearest where that voice was in
--- the previous chord. Before this every chord was a root-position stack, so
--- the whole accompaniment jumped bodily with each change instead of holding
--- common tones and moving the rest by a step.
 function G:voice_chord()
   local ct, vo, pv = self.ct, self.vo, self.pvo
   local n = #ct
   local base = self.lhbase
   local mel = (self.mlow or 127) - 2
-  -- the melody wins the register argument. If the bass has drifted up far
-  -- enough that the chord cannot fit beneath the right hand, drop the whole
-  -- voicing an octave instead of crossing into it.
   if base + 7 > mel and base - 12 >= self.lo then base = base - 12 end
   for i = #vo, 1, -1 do vo[i] = nil end
   vo[1] = base
@@ -410,8 +389,6 @@ end
 
 function G:build_cw(ms)
   local base, cw = self.chw, self.cw
-  -- lock has to contribute at ms == 0 as well, otherwise tension does
-  -- nothing on the weak beats, which is most of the notes.
   local e = 0.15 + self.lock * (0.35 + 0.65 * ms)
   for i = 1, 12 do cw[i] = base[i] ^ e end
   local t = T.TEND[self.pdeg]
@@ -447,8 +424,6 @@ function G:pick(centre, leap)
     if a > 0 and a < 50 and b > 0 and b < 50 then
       local iv = (pp - root) % 12 + 1
       x = pw[a] * rw[b] * pcw[iv] * cw[iv]
-      -- a leap that lands off the chord just sounds like a mistake
-      -- at high tension a leap is allowed to land somewhere unresolved
       if leap and not cp[iv] then x = x * (0.05 + 0.45 * self.p.tens) end
       if bd ~= 0 and (pp - prev) * bd > 0 then x = x * bs end
       if rs then
@@ -721,7 +696,6 @@ function G:score_motif(m)
     local lr = leaps / iv
     local e = lr - 0.26
     sc = sc + 25 - 210 * e * e + 30 * (steps / iv) - reps * 7
-    -- a shape made entirely of seconds wanders instead of going somewhere
     if leaps == 0 and iv >= 3 then sc = sc - 26 end
   end
   local wrap = m.d[n] - m.d[1]
@@ -755,8 +729,6 @@ function G:score_motif(m)
 end
 
 function G:best_motif(len, avoid)
-  -- only runs on reroll and mutate, so the extra candidates are free and
-  -- the whole piece is built on whichever one wins
   local tries = 10 + floor(self.song * 10)
   local bm, bs = nil, -1e9
   for i = 1, tries do
@@ -809,9 +781,6 @@ end
 function G:vel(i, acc, hand)
   local p = self.p
   local ms = (self.M[i] - 1) * 0.25
-  -- a hand does not re-roll its weight from scratch on every note. The
-  -- unevenness is smoothed so it reads as touch, and the line leans into
-  -- rising phrases and relaxes on falling ones.
   local amp = 3 + p.hum * 30
   self.vn = self.vn * 0.58 + (random() - 0.5) * amp * 0.72
   local v = p.vel + (ms - 0.7) * self.vrange * 0.8 + self.vn + acc + self.bdyn
@@ -895,14 +864,9 @@ function G:left_hand(flat, pos, cad, rhn, rhm)
       hits[-nh] = k
     end
   end
-  -- thinning must not be able to delete the accompaniment altogether
   if nh == 0 and rhn > 0 and fk ~= 0 then
     nh = 1; hits[1] = fi; hits[-1] = fk
   end
-  -- re-voice now that this bar's melody is known, and take the ceiling from
-  -- the voicing itself. Filtering against split + 4 afterwards was throwing
-  -- away tones the voicing had deliberately placed, which collapsed chords
-  -- to a bare bass note whenever the bass sat high.
   self:voice_chord()
   local top = self.vo[#self.vo] or (self.split + 4)
   local ar = 0.72 + 0.28 * self.art
@@ -1114,8 +1078,6 @@ function G:gen_bar(flat, sec, pos, cad, final, bi, plen)
   for i = 1, bl do rhm[i] = 0 end
 
   if self.conseq then
-    -- these are the same event objects the opening bar used, so they carry
-    -- its timing and touch. Re-humanise them the way a reused bar is.
     local sf = self.sflat
     local ln = 0
     for i = 1, #sf do
@@ -1205,8 +1167,6 @@ function G:hands(flat, pos, cad, rhm)
       end
     end
   end
-  -- the hands were free to collide, which produced unisons between the
-  -- melody and the top of the chord
   self.mlow = mlow
   self:left_hand(flat, pos, cad, rhn, rhm)
 end
@@ -1254,9 +1214,6 @@ function G:bar_begin()
 
   local flat = self.flat
   self.conseq = last and pos > 0 and #self.sflat > 0 and random() < self.song * 0.55
-  -- a bar can repeat inside a section, or across a section boundary when the
-  -- form reuses the same slot. Previously only positions 1..bps-2 were
-  -- eligible, which capped the repeat control at roughly one bar in five.
   local elig = (pos > 0) or (sec > 1 and self.form[sec] == self.form[sec - 1])
   if final or (last and self.rep < 0.7) then elig = false end
   local reuse = elig and #flat > 0
@@ -1307,8 +1264,6 @@ function G:bar_begin()
   self.melsil = nm == 0
 end
 
--- A repeated bar used to come back byte-identical, down to the velocities
--- and the timing jitter, which is the one thing a player never does.
 function G:refresh(flat, cad)
   local hum = self.p.hum
   local amp = 3 + hum * 16
@@ -1324,9 +1279,6 @@ function G:refresh(flat, cad)
   end
 end
 
--- and if the harmony moved while the bar repeated, the melody has to be
--- re-seated and the accompaniment rebuilt, or it plays the previous chord
--- over the current one
 function G:reseat(flat, pos, cad)
   local bl = self.bl
   local w = 0
@@ -1374,9 +1326,6 @@ function G:shape_for(pr)
   local ns = #T.SHAPES
   local bt = clamp(self.bn * 0.55 + self.cx * 0.3, -0.7, 0.9)
   local hm = self.p.harm or 0.35
-  -- a chord should come back wearing the same colour each time round the
-  -- progression. Re-rolling the voicing every cycle made the harmony sound
-  -- reshuffled rather than composed.
   if pr[3] and abs((pr[4] or 9) - bt) < 0.08 and abs((pr[5] or 9) - hm) < 0.08 then
     return pr[3]
   end
@@ -1388,8 +1337,6 @@ function G:shape_for(pr)
     end
   end
   local set = self.shset
-  -- harmony leans the shape choice toward extended chords (high) or bare
-  -- triads and dyads (low). This is its main per-bar audible effect.
   local hm = (self.p.harm or 0.35) - 0.4
   for j = 1, ns do
     local f = 1 + (T.SHAPES[j].n - 3) * hm * 1.15
@@ -1656,8 +1603,6 @@ end
 function G:info()
   local b = floor(self.bcont + 0.5)
   if b > 3 then b = 3 elseif b < -5 then b = -5 end
-  -- cached: redraw calls this every frame and the concatenation was
-  -- allocating a fresh string each time for something that changes rarely.
   local k = b * 100 + self.infl
   if k ~= self.ikey then
     self.ikey = k

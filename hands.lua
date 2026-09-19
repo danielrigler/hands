@@ -1,7 +1,7 @@
 --
 --
 --
---          hands v0.05
+--          hands v0.02
 --           @dddstudio
 --
 --
@@ -108,9 +108,6 @@ local function say(t)
   sdirty = true
 end
 
--- every voice/echo/pedal coroutine captures the epoch it started in.
--- panic() bumps it, so anything still in flight abandons instead of
--- sounding notes after a stop.
 local function playing(ep) return running and ep == epoch end
 
 local function steal()
@@ -273,8 +270,6 @@ local function tick()
     gen:advance()
     local f = p.swing / 3
     if synced then
-      -- follow the norns tempo live, and re-derive if it has moved enough
-      -- to change how dense a bar should be
       local st = beatsec() * sdiv
       if math.abs(st - step_sec) > step_sec * 0.02 then
         step_sec = st
@@ -282,8 +277,6 @@ local function tick()
         dirty = true
       end
       slen = step_sec * (even and (1 + f) or (1 - f))
-      -- land on the grid, then push the off-steps late by hand so swing
-      -- survives being locked to the clock
       clock.sync(sdiv)
       if even and f > 0.001 then clock.sleep(step_sec * f) end
     else
@@ -428,9 +421,6 @@ function init()
   params:set_action("right", function(v) p.rh = v; dirty = true end)
   params:add_control("harm", "harmony", cs.new(0, 1, 'lin', 0, 0.35))
   params:set_action("harm", function(v)
-    -- no dead zone: small turns change chord richness immediately, and the
-    -- progression is rebuilt at the next section boundary rather than
-    -- yanked mid-phrase.
     if gen and math.abs(v - p.harm) > 0.06 then gen.progdirty = true end
     p.harm = v
     dirty = true
@@ -570,9 +560,6 @@ local function cell(x, w, nm, val, v)
   screen.fill()
 end
 
--- ask the parameter itself how far along its range it sits. Hardcoding this
--- got 'pace' wrong, because its controlspec is exponential and the bar was
--- drawn linearly.
 local PP = {}
 local function nrm(id, v)
   local pp = PP[id]
@@ -604,8 +591,6 @@ function redraw()
   local lo, hi = gen.lo, gen.hi
   local sp = 32 / max(1, hi - lo)
   local alo, ahi, blo, bhi = 127, 0, 127, 0
-  -- only notes still on screen. Scanning the whole ring meant the range
-  -- converged on the all-time min/max and the shading stopped moving.
   for i = 1, HL do
     local h = hist[i]
     if h and h.n then
@@ -685,7 +670,6 @@ function redraw()
   if toast then
     if util.time() < toast_t then msg = toast else toast = nil end
   end
-  -- holding K1 shows what the combos will do rather than making you recall it
   if not msg and alt then msg = (running and "k2 stop" or "k2 run") .. "    k3 randomize" end
   if msg then
     local w = (screen.text_extents and screen.text_extents(msg) or #msg * 4) + 12
