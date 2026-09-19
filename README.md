@@ -70,7 +70,7 @@ polyphony, velocity and CC64 output.
 - **repeat** holds onto bars. At the top of the range a bar will repeat
   outright; low down, every bar is freshly generated.
 - **tension** loosens the pull toward chord tones, so the melody spends more
-  time on passing and appoggiatura notes inside the scale. 
+  time on passing and appoggiatura notes inside the scale.
 - **stray** is the only thing that lets notes outside the scale through. At
   zero the right hand is strictly diatonic. Above it you get leading-tone
   approaches and chromatic lower neighbours, and every one of them resolves by
@@ -87,7 +87,11 @@ polyphony, velocity and CC64 output.
   meet; the melody sits about half an octave above it.
 - **width** opens the whole texture out around that point, in both directions.
 - **right hand** trades songlike phrasing for busier, more ornamented playing.
-- **drift** lets mode, density and register wander slowly on their own.
+- **drift** lets the piece move on its own. Low down it wanders mode, density
+  and register. Higher up it also renews melodic material at the end of each
+  pass through the form: one of the three motifs is replaced, and less often
+  the contour, the form itself or the chord progression. At zero the piece is
+  a fixed loop and only changes when you press K2 or K3.
 
 ## clock
 

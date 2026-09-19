@@ -707,13 +707,13 @@ function G:make_motif(len, avoid)
         if li ~= 0 and random() < 0.45 then st = (li > 0 and 1 or -1) * abs(st) end
       end
       if k == 0 then st = 0 end
-      if k > 0 and k >= non * 0.6 and d ~= 0 and random() < 0.5 + 0.45 * sg then
+      if k > 0 and k >= non * 0.66 and d ~= 0 and random() < 0.28 + 0.5 * sg then
         st = d > 0 and -1 or 1
         if d > 2 or d < -2 then st = st * 2 end
       end
       local nd = d + st
-      local tgt = floor(T.contour(ct, (i - 1) / len) * 3)
-      if abs(nd - tgt) > 6 then nd = d - st end
+      local tgt = floor(T.contour(ct, (i - 1) / len) * (self.marc or 3))
+      if abs(nd - tgt) > 5 + (self.marc or 3) then nd = d - st end
       li = nd - d
       d = clamp(nd, -lim, lim + 2)
       k = k + 1
@@ -766,9 +766,9 @@ function G:score_motif(m)
   end
   local wrap = m.d[n] - m.d[1]
   if wrap < 0 then wrap = -wrap end
-  if wrap <= 1 then sc = sc + 32
-  elseif wrap <= 2 then sc = sc + 10
-  else sc = sc - 14 * (wrap - 2) end
+  if wrap <= 1 then sc = sc + 20
+  elseif wrap <= 3 then sc = sc + 12
+  else sc = sc - 9 * (wrap - 3) end
   local nap, api = 0, 1
   for i = 1, n do
     if m.d[i] == hi then
@@ -795,14 +795,26 @@ function G:score_motif(m)
 end
 
 function G:best_motif(len, avoid)
-  local tries = 10 + floor(self.song * 10)
-  local bm, bs = nil, -1e9
+  local tries = 9 + floor(self.song * 7)
+  local cand, sc, mx = {}, {}, -1e9
   for i = 1, tries do
     local m = self:make_motif(len, avoid)
-    local q = self:score_motif(m)
-    if q > bs then bs = q; bm = m end
+    cand[i] = m
+    sc[i] = self:score_motif(m)
+    if sc[i] > mx then mx = sc[i] end
   end
-  return bm
+  local temp = 10 + 26 * (1 - self.song)
+  local tot, w = 0, {}
+  for i = 1, tries do
+    w[i] = exp((sc[i] - mx) / temp)
+    tot = tot + w[i]
+  end
+  local r, acc = random() * tot, 0
+  for i = 1, tries do
+    acc = acc + w[i]
+    if r <= acc then return cand[i] end
+  end
+  return cand[tries]
 end
 
 function G:pick_transform()
@@ -1225,7 +1237,7 @@ function G:gen_bar(flat, sec, pos, cad, final, bi, plen)
       end
     end
   else
-    local m = self.motif[(slot - 1) % 2 + 1]
+    local m = self.motif[slot] or self.motif[(slot - 1) % 2 + 1]
     local tr = self:pick_transform()
     if apex then tr.tp = tr.tp + (random() < 0.6 and 2 or 1) end
     self:render_motif(flat, m, tr, cad, final, dens, apex)
@@ -1269,6 +1281,7 @@ function G:bar_begin()
     self:update_scale()
     self:update_lut()
   end
+  if bi == 0 and self.bar > 0 then self:renew() end
   if bi % self.hr == 0 then self:pivot_roll() end
   if pos == 0 then
     local pix = self.secpat[self.form[sec]] or self.secpat[1]
@@ -1600,6 +1613,7 @@ function G:reroll(chaos)
   self.pstep = ({2,4,3,4,8})[random(5)]
   self.ctr = random(6)
   self.camp = (2 + random() * 9) * (1 - 0.55 * sg)
+  self.marc = 2.4 + random() * 4.2
   self.mbase = (st and st.mb) or ((random() < sg * 0.85) and 0 or ({0,0,7,-7,7,14})[random(6)])
   self.seqleft = 0
   self.atonic = (not (st and st.at == 0)) and random() < sg * 0.35
@@ -1625,6 +1639,7 @@ function G:reroll(chaos)
   self.apxpos = max(1, floor(self.bps * 0.6))
   self.motif[1] = self:best_motif((random() < 0.45 + 0.35 * sg) and self.bl // 2 or self.bl)
   self.motif[2] = self:best_motif((random() < 0.55 + 0.25 * sg) and self.bl // 2 or self.bl, self.lastct)
+  self.motif[3] = self:best_motif((random() < 0.5 + 0.3 * sg) and self.bl // 2 or self.bl, self.lastct)
 
   self.cbase = p.centre + self.bn * 3 + 4
   self.pn = clamp(floor(self.cbase), self.split, self.hi)
@@ -1665,6 +1680,29 @@ function G:mutate()
   for i = #self.flat, 1, -1 do self.flat[i] = nil end
 end
 
+function G:renew()
+  local d = self.p.drift or 0
+  if d <= 0.01 then return end
+  local q = d * 0.8
+  if random() < q then
+    local k = random(3)
+    local m = self.motif[k]
+    self.motif[k] = self:best_motif(m and m.len or self.bl, self.lastct)
+  end
+  if random() < q * 0.5 then
+    self.ctr = pne(6, self.ctr)
+    self.marc = 2.4 + random() * 4.2
+  end
+  if random() < q * 0.34 then
+    self.form = (random() < self.song * 0.9) and HFORMS[random(#HFORMS)] or FORMS[random(#FORMS)]
+  end
+  if random() < q * 0.26 then self.progdirty = true end
+  if random() < q * 0.20 then
+    self.octs[random(3)] = floor(T.OCTS[random(#T.OCTS)] + 0.5)
+    self:plan_registers()
+  end
+end
+
 function G:save_state()
   return {
     v = 1, root = self.root, bo = self.bo, infl = self.infl, bl = self.bl,
@@ -1676,7 +1714,8 @@ function G:save_state()
     atonic = self.atonic and 1 or 0, lhseed = self.lhseed, artbase = self.artbase,
     octs = self.octs, replift = self.replift, arcamp = self.arcamp,
     db = self.db, dd = self.dd, dc = self.dc, pc = self.pc, pd = self.pd,
-    m1 = self.motif[1], m2 = self.motif[2],
+    m1 = self.motif[1], m2 = self.motif[2], m3 = self.motif[3],
+    marc = self.marc,
   }
 end
 
@@ -1690,6 +1729,7 @@ function G:load_state(t)
   self.rstyle, self.rrot, self.na = t.rstyle, t.rrot, t.na
   self.nb2, self.nmix, self.pstep = t.nb2, t.nmix, t.pstep
   self.legato, self.ctr, self.camp = t.legato, t.ctr, t.camp
+  self.marc = t.marc or 3
   self.mbase, self.atonic = t.mbase, t.atonic == 1
   self.lhseed, self.artbase = t.lhseed, t.artbase
   self.octs = t.octs or {0, 0, 0}
@@ -1700,6 +1740,7 @@ function G:load_state(t)
   if t.pd and t.pd.n then self.pd = t.pd end
   self.tb, self.td, self.tc = self.db, self.dd, self.dc
   self.motif[1], self.motif[2] = t.m1, t.m2
+  self.motif[3] = t.m3 or t.m2
   self:derive()
   self:update_scale()
   self:update_lut()
