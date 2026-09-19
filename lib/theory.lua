@@ -251,8 +251,6 @@ T.LH = {
       return (s % 8 == 5) and -1 or 0 end},
 }
 
--- left-hand patterns ordered sparse -> busy, so the dial walks a real gradient
--- rather than jumping between four unordered buckets
 T.LADDER = {1, 2, 3, 4, 7, 17, 15, 16, 6, 5, 11, 10, 9, 8, 14, 12, 13}
 T.LPOS = {}
 for i = 1, #T.LADDER do T.LPOS[T.LADDER[i]] = i end
