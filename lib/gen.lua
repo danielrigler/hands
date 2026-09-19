@@ -57,8 +57,12 @@ function G.new(p)
   o.atonic, o.conseq = false, false
   o.apxpos, o.bps, o.hr, o.nsec = 1, 4, 1, 4
   o.lhseed = 0
+  o.lhallow, o.lhused, o.lhpi = {}, {}, 1
+  o.lhord = {0, -1, 1}
   o.choff, o.newchord, o.pedb = 0, true, 1
   o.res, o.resdir = nil, -1
+  o.stray, o.resforce = 0, false
+  o.ssig, o.flatsig, o.sfsig = 0, -1, -1
   o.bo = 0
   o.progdirty = false
   o.vo, o.pvo = {}, {}
@@ -99,7 +103,9 @@ function G:derive()
   self.legato = clamp(0.12 + (p.len or 0.55) * 0.86, 0.05, 0.99)
   self.artbase = clamp(0.45 + (p.len or 0.55) * 0.8, 0.4, 1.3)
   local tn = p.tens or 0.35
-  self.chrom = clamp((tn - 0.4) * 0.6, 0, 0.36)
+  local cr = clamp(p.stray or 0, 0, 1)
+  self.stray = cr
+  self.chrom = cr * cr * 0.34
   self.lock = clamp(2.5 - tn * 2.3 - 0.5 * self.cx, 0.25, 2.6)
   self.pull = 0.28 + tn * 0.5
   self.reso = p.reso
@@ -114,30 +120,54 @@ function G:derive()
   self.vrange = clamp(p.vel * 0.34, 8, 46)
   self.lo = clamp(floor(p.centre - p.rngw * 0.62), 12, 118)
   self.hi = clamp(floor(p.centre + p.rngw * 0.44), self.lo + 14, 127)
-  self.split = clamp(floor(p.centre - 8), self.lo + 6, self.hi - 6)
-  self.lhtop = clamp(floor(p.centre) - 6, self.lo + 6, self.hi - 12)
+  self.split = clamp(floor(p.centre - 4 - p.rngw * 0.14), self.lo + 6, self.hi - 6)
+  self.lhtop = clamp(floor(p.centre) - 5 - floor(p.rngw * 0.07), self.lo + 6, self.hi - 12)
+end
+
+local function hsh(a)
+  local x = (a * 1103515245 + 12345) % 2147483648
+  x = (x * 1103515245 + 12345) % 2147483648
+  return x / 2147483648
 end
 
 function G:build_secpat()
-  local lv = self.lhlvl
-  local sp = self.secpat
+  local L, P, sp = T.LADDER, T.LPOS, self.secpat
+  local n = #L
+  local allow, used = self.lhallow, self.lhused
+  for i = 1, n do allow[i] = true; used[i] = false end
+  local ls = self.lhset
+  if ls then
+    local na = 0
+    for i = 1, n do allow[i] = false end
+    for i = 1, #ls do
+      local q = P[ls[i]]
+      if q and not allow[q] then allow[q] = true; na = na + 1 end
+    end
+    if na < 3 then for i = 1, n do allow[i] = true end end
+  end
+  local lh = clamp(self.p.lh or 0.45, 0, 1)
+  local c = 1 + lh * (n - 1)
+  local spread = 1.3 + 3.0 * (1 - abs(lh * 2 - 1))
+  local seed, ord = self.lhseed, self.lhord
   for slot = 1, 3 do
-    local l = lv
-    if slot > 1 then
-      l = clamp(lv + ({0, 1, -1, 1, -1, 2})[(self.lhseed + slot * 5) % 6 + 1], 0, 3)
-    end
-    local g = T.LHA[l + 1]
-    local ls = self.lhset
-    if ls then
-      local k = {}
-      for i = 1, #ls do
-        for j = 1, #g do if g[j] == ls[i] then k[#k+1] = ls[i] end end
+    local r = hsh(seed * 977 + slot * 71)
+    local t = c + ord[slot] * (0.6 + spread * r)
+    local bi, bd = 0, 1e9
+    for i = 1, n do
+      if allow[i] and not used[i] then
+        local d = abs(i - t) + hsh(seed * 613 + slot * 149 + i * 17) * 1.1
+        if d < bd then bd = d; bi = i end
       end
-      if #k > 0 then g = k end
     end
-    sp[slot] = g[(self.lhseed + slot * 3) % #g + 1]
+    if bi == 0 then
+      for i = 1, n do if allow[i] then bi = i; break end end
+      if bi == 0 then bi = 1 end
+    end
+    used[bi] = true
+    sp[slot] = L[bi]
   end
   self.lhpat = T.LH[sp[1]]
+  self.lhpi = P[sp[1]] or 1
 end
 
 function G:arcof(i)
@@ -223,26 +253,39 @@ end
 
 function G:update_scale()
   self.bcont = self:bnorm()
+  local opv = self.pv
   local pv, f, dir = T.scale_for(self.bcont, self.s0)
   self.pv, self.pf, self.pdir = pv, f, dir
-  self:apply_scale(false)
+  local keep = (pv > 0 and pv == opv and self.palt) or false
+  self:apply_scale(keep)
 end
 
 function G:pivot_roll()
-  local a = self.pv > 0 and random() < self.pf
+  if self.pv == 0 then
+    if self.palt then self:apply_scale(false) end
+    return
+  end
+  local f = self.pf
+  local th = self.palt and (f - 0.18) or (f - 0.58)
+  local a = random() < th
   if a ~= self.palt then self:apply_scale(a) end
 end
 
 function G:apply_scale(alt)
   self.palt = alt
+  self.ssig = self.ssig + 1
   local s, s0, w = self.s, self.s0, self.pcw
   for i = 1, 7 do s[i] = s0[i] end
   if alt then s[self.pv] = s[self.pv] + self.pdir end
   local inf = self.infl
   if inf == 1 and s[7] < 11 then s[7] = s[7] + 1 end
-  local tn = self.p.tens or 0.35
-  local ch = 0.008 + 0.05 * self.cx + 0.17 * tn * tn
-  for i = 1, 12 do w[i] = ch end
+  local cr = self.stray or 0
+  local ch = 0.003 + (0.02 * self.cx + 0.11) * cr * cr
+  for i = 1, 12 do w[i] = ch * 0.22 end
+  for i = 1, 7 do
+    local a = (s[i] - 1) % 12 + 1
+    if w[a] < ch then w[a] = ch end
+  end
   for i = 1, 7 do
     local d = T.DEG_W[i]
     local a = s[i] % 12 + 1
@@ -255,14 +298,15 @@ function G:apply_scale(alt)
     local ff = 1 - 0.40 * sg
     for i = 1, 12 do if not hp[i] then w[i] = w[i] * ff end end
   end
+  local iw = 0.18 + 0.82 * cr
   if inf == 2 then
     local b5 = (s[5] - 1) % 12 + 1
-    if w[b5] < 0.34 then w[b5] = 0.34 end
+    if w[b5] < 0.34 * iw then w[b5] = 0.34 * iw end
     local b3 = (s[3] - 1) % 12 + 1
-    if w[b3] < 0.30 then w[b3] = 0.30 end
+    if w[b3] < 0.30 * iw then w[b3] = 0.30 * iw end
   elseif inf == 3 then
     local x = (s[4] + 1) % 12 + 1
-    if w[x] < 0.42 then w[x] = 0.42 end
+    if w[x] < 0.42 * iw then w[x] = 0.42 * iw end
   elseif inf == 4 then
     local x = s[6] % 12 + 1
     w[x] = max(w[x], 0.75)
@@ -304,8 +348,9 @@ function G:build_chord(deg, shi)
   self.shape = shape
   local w, cp, ct = self.chw, self.cpc, self.ct
   local s = self.s
-  for i = 1, 12 do w[i] = 0.20; cp[i] = false end
-  for i = 1, 7 do w[s[i] % 12 + 1] = 0.30 end
+  local nsw = 0.02 + 0.20 * (self.stray or 0)
+  for i = 1, 12 do w[i] = nsw; cp[i] = false end
+  for i = 1, 7 do w[s[i] % 12 + 1] = 0.34 end
   local n = #shape
   local r0 = self:dn(deg)
   for i = 1, n do
@@ -451,12 +496,33 @@ function G:emit(pn, ms)
   self.pn = pn
   local iv = (pn - self.root) % 12 + 1
   self.pdeg = self.pcdeg[iv]
-  if ms and ms >= 0.5 and not self.cpc[iv] then
+  if not self.insc[iv] then
     self.res = pn
+    self.resforce = true
+    local up = self.insc[iv % 12 + 1]
+    local dn = self.insc[(iv - 2) % 12 + 1]
+    if up and not dn then self.resdir = 1
+    elseif dn and not up then self.resdir = -1
+    else self.resdir = (self.li >= 0) and 1 or -1 end
+  elseif ms and ms >= 0.5 and not self.cpc[iv] then
+    self.res = pn
+    self.resforce = false
     self.resdir = (self.pdeg == 7) and 1 or -1
   else
     self.res = nil
+    self.resforce = false
   end
+end
+
+function G:resnote()
+  local rs, rd = self.res, self.resdir
+  if not rs then return nil end
+  local ins, r = self.insc, self.root
+  for k = 1, 3 do
+    local x = rs + rd * k
+    if ins[(x - r) % 12 + 1] then return x end
+  end
+  return nil
 end
 
 function G:stepup(n)
@@ -841,8 +907,8 @@ function G:left_hand(flat, pos, cad, rhn, rhm)
   local bl, nb, M = self.bl, self.nb, self.M
   local pat = self.lhpat
   if rhn == 0 and self.lhlvl < 3 and random() < 0.7 then
-    local g = T.LHA[min(4, self.lhlvl + 2)]
-    pat = T.LH[g[self.lhseed % #g + 1]]
+    local q = min(#T.LADDER, self.lhpi + 2 + floor(random() * 4))
+    pat = T.LH[T.LADDER[q]]
   end
   local busy = rhn / bl
   local thin = clamp(self.lhthin + self.p.space * 0.7 + busy * 0.42 * (1.1 - self.p.lh * 0.45), 0, 0.95)
@@ -918,13 +984,28 @@ end
 function G:ornament(flat, ev, pn, tk)
   local o = self.orn
   if o <= 0 or random() > o * 0.55 then return end
-  local dir = random() < 0.5 and -1 or 1
+  local dir = random() < 0.62 and -1 or 1
   local g = self:snapc(pn) ~= pn and pn or pn + dir * (random() < 0.75 and 1 or 2)
-  if random() > self.cx * 0.5 + (self.p.tens or 0.35) * 0.5 then g = self:snaps(g) end
+  if dir > 0 or random() > (self.stray or 0) * 0.8 then g = self:snaps(g) end
   g = self:fold(g)
   if g == pn then return end
   local t = tk > 1 and tk - 1 or tk
   local e = newev(t, 1, max(1, ev.v - 18), 0)
+  e.n[1] = g
+  e.g = true
+  e.o = clamp(self.gof + self:lag(0) * 0.4, 0, 0.95)
+  flat[#flat+1] = e
+end
+
+function G:chrapp(flat, ev, pn, tk, ms)
+  if self.chrom <= 0 or tk < 2 then return end
+  local q = self.chrom * ((ms and ms >= 0.5) and 1.0 or 0.45)
+  if random() > q then return end
+  local dir = (random() < 0.78) and -1 or 1
+  local g = pn + dir
+  if g < self.lo or g > self.hi then return end
+  if self.insc[(g - self.root) % 12 + 1] then return end
+  local e = newev(tk - 1, 1, max(1, ev.v - 14), 0)
   e.n[1] = g
   e.g = true
   e.o = clamp(self.gof + self:lag(0) * 0.4, 0, 0.95)
@@ -1013,17 +1094,14 @@ function G:render_motif(flat, m, tr, cad, final, dens, apex)
         local rs = self.res
         if rs then
           local rdd = (pn - rs) * self.resdir
-          if rdd ~= 1 and rdd ~= 2 and random() < self.pull + 0.3 * sg then
-            local q = rs + self.resdir
-            if q ~= self.pn and abs(q - pn) <= 3 then pn = q end
+          local pr = self.resforce and 0.96 or (self.pull + 0.3 * sg)
+          if rdd ~= 1 and rdd ~= 2 and random() < pr then
+            local q = self:resnote()
+            local lim = self.resforce and 5 or 3
+            if q and q ~= self.pn and abs(q - pn) <= lim then pn = q end
           end
         end
         pn = self:fold(self:near(pn))
-        if ms < 0.5 and self.chrom > 0 and random() < self.chrom then
-          local q = pn + (self.li >= 0 and -1 or 1)
-          if q >= self.lo and q <= self.hi
-             and not self.insc[(q - self.root) % 12 + 1] then pn = q end
-        end
         local lastn = lastrep and k == kmax
         if cad and lastrep and tk >= bl - 4 and random() < 0.2 + 0.55 * self.p.harm + 0.5 * sg then
           pn = self:cadence_note(pn, final)
@@ -1052,6 +1130,7 @@ function G:render_motif(flat, m, tr, cad, final, dens, apex)
             end
           end
           self:ornament(flat, e, pn, tk)
+          self:chrapp(flat, e, pn, tk, ms)
           prevn, prevtk = pn, tk
         end
       end
@@ -1079,6 +1158,7 @@ function G:gen_bar(flat, sec, pos, cad, final, bi, plen)
 
   if self.conseq then
     local sf = self.sflat
+    if self.sfsig ~= self.ssig then self:refit(sf); self.sfsig = self.ssig end
     local ln = 0
     for i = 1, #sf do
       local e = sf[i]
@@ -1191,7 +1271,9 @@ function G:bar_begin()
   end
   if bi % self.hr == 0 then self:pivot_roll() end
   if pos == 0 then
-    self.lhpat = T.LH[self.secpat[self.form[sec]] or self.secpat[1]]
+    local pix = self.secpat[self.form[sec]] or self.secpat[1]
+    self.lhpat = T.LH[pix]
+    self.lhpi = T.LPOS[pix] or 1
     self.art = clamp(self.artbase + (random() - 0.5) * 0.3, 0.35, 1.4)
     self.tgv = 1 + (random() - 0.5) * 0.34
     local raw = (self.octs[self.form[sec]] or 0) + self:arcof(sec)
@@ -1220,16 +1302,20 @@ function G:bar_begin()
     and random() < self.rep * (same and 1 or (0.4 + 0.55 * self.rep))
   if reuse then
     self.bdyn = self:dyn(pos)
-    if not same then self:reseat(flat, pos, last) end
+    local stale = self.flatsig ~= self.ssig
+    if stale then self:refit(flat); self.flatsig = self.ssig end
+    if (not same) or stale then self:reseat(flat, pos, last) end
     self:refresh(flat, last)
   else
     for i = #flat, 1, -1 do flat[i] = nil end
     self:gen_bar(flat, sec, pos, last, final, bi, plen)
+    self.flatsig = self.ssig
   end
   if pos == 0 and not reuse then
     local sf = self.sflat
     for i = #sf, 1, -1 do sf[i] = nil end
     for i = 1, #flat do if flat[i].h == 0 then sf[#sf+1] = flat[i] end end
+    self.sfsig = self.ssig
   end
   local used = self.sc
   for i = 1, bl do used[i] = 0 end
@@ -1262,6 +1348,30 @@ function G:bar_begin()
   self.barn = np
   self.lastsil = np == 0
   self.melsil = nm == 0
+end
+
+function G:refit(flat)
+  local ins, r = self.insc, self.root
+  for i = 1, #flat do
+    local e = flat[i]
+    if e.h == 0 then
+      local n = e.n
+      for j = 1, #n do
+        local x = n[j]
+        if not ins[(x - r) % 12 + 1] then
+          local q = self:snaps(x)
+          if abs(q - x) <= 2 then n[j] = q end
+        end
+      end
+      local b = e.b
+      if b then
+        for j = 1, #b do
+          local x = b[j]
+          if not ins[(x - r) % 12 + 1] then b[j] = self:snaps(x) end
+        end
+      end
+    end
+  end
 end
 
 function G:refresh(flat, cad)
@@ -1433,6 +1543,7 @@ function G:reroll(chaos)
       p.rep = j(sd.rep, 0.18)
       p.len = j(sd.len, 0.15)
       p.tens = j(sd.tens, 0.15)
+      p.stray = clamp((sd.stray or 0.08) + (random() - 0.5) * 0.14, 0, 1)
       p.rh = j(sd.right, 0.18)
       p.lh = j(sd.left, 0.18)
       p.harm = j(sd.harm, 0.13)
@@ -1447,6 +1558,7 @@ function G:reroll(chaos)
       p.rep = 0.15 + random() * 0.8
       p.len = 0.15 + random() * 0.8
       p.tens = random() * 0.8
+      p.stray = random() < 0.55 and random() * 0.22 or (0.22 + random() * 0.45)
       p.rh = random() ^ 1.3
       p.lh = random() < 0.12 and 0 or (0.1 + random() * 0.9)
       p.harm = random()

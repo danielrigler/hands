@@ -20,21 +20,22 @@ Free-running by default, and it can follow the norns clock instead.
 Holding K1 shows what K2 and K3 will do, and each of the four actions
 flashes a short confirmation on screen.
 
-The screen shows key and mode top left, the current chord top right, a
-scrolling roll of what both hands have played, the position in the bar, and
-the two dials for the current page.
+The screen shows key and mode top left, the current chord top right (`stop`
+when the sequence is not running), a scrolling roll of what both hands have
+played, the position in the bar, and the two dials for the current page.
 
 ## pages
 
 | page | E2 | E3 |
 |---|---|---|
-| style | style | pace |
+| style | style | pace (step when clock-locked) |
+| range | register | width |
+| hands | left hand | right hand |
 | time | swing | humanize |
 | flow | motion | space |
 | beat | syncopation | repeat |
 | touch | note length | pedal |
-| tone | mode | register |
-| hands | left hand | right hand |
+| tone | mode | stray |
 | feel | rubato | tension |
 | shift | harmony | drift |
 
@@ -68,12 +69,23 @@ polyphony, velocity and CC64 output.
   between events. They pull against each other.
 - **repeat** holds onto bars. At the top of the range a bar will repeat
   outright; low down, every bar is freshly generated.
-- **tension** loosens the pull toward chord tones and raises the chance of
-  chromatic and appoggiatura notes.
+- **tension** loosens the pull toward chord tones, so the melody spends more
+  time on passing and appoggiatura notes inside the scale. 
+- **stray** is the only thing that lets notes outside the scale through. At
+  zero the right hand is strictly diatonic. Above it you get leading-tone
+  approaches and chromatic lower neighbours, and every one of them resolves by
+  step. The left hand is always diatonic.
 - **harmony** controls chord richness, from bare triads and dyads up to
   added-note and extended voicings, and rebuilds the progression when moved.
-- **left hand** goes from a single held bass through blocked and broken
-  patterns to running arpeggios. At zero the left hand is silent.
+- **left hand** walks an ordered ladder of accompaniment patterns, from
+  sustained held chords at the bottom, through bass and comping figures and
+  broken chords, up to running arpeggios. At zero the left hand is silent.
+  The dial shows the pattern currently playing rather than a percentage; each
+  section of the form gets a different one from around the same point on the
+  ladder, so the setting picks a character and still gives you variety.
+- **register** sets where the two hands sit, roughly the point where they
+  meet; the melody sits about half an octave above it.
+- **width** opens the whole texture out around that point, in both directions.
 - **right hand** trades songlike phrasing for busier, more ornamented playing.
 - **drift** lets mode, density and register wander slowly on their own.
 
@@ -84,7 +96,8 @@ page, and ignores the norns transport. Set **tempo** in the Clock parameter
 group to `norns clock` and it instead locks to the norns tempo, following
 whatever clock source is selected in the system parameters, including MIDI
 and Link. **pace** is then ignored and the style page shows the clock tempo
-with a `syn` marker.
+with a `syn` marker, and E3 on that page switches to **step** so the dial
+still does something useful.
 
 **step** sets how long one step of the sequence is in note values, default
 `1/16`. A bar is 16 steps (12 in the 3/4 styles), so at `1/16` a bar is one
@@ -102,7 +115,7 @@ long a bar is.
 ## install
 
 ```
-;install https://github.com/dddstudio/hands
+;install https://github.com/danielrigler/hands
 ```
 
 The script checks for updates on launch and offers to pull them if the

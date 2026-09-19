@@ -1,7 +1,7 @@
 --
 --
 --
---          hands v0.02
+--          hands v0.03
 --           @dddstudio
 --
 --
@@ -27,7 +27,7 @@ local tab = require 'tabutil'
 local floor, random, max, min = math.floor, math.random, math.max, math.min
 local function clamp(x,a,b) if x<a then return a elseif x>b then return b else return x end end
 
-local p = {bright=0, space=0.35, motion=0.6, syn=0, rep=0.57, len=0.58, tens=0.35, lh=0.45, rh=0.3, harm=0.35, drift=0.3,
+local p = {bright=0, space=0.35, motion=0.6, syn=0, rep=0.57, len=0.58, tens=0.35, stray=0.08, lh=0.45, rh=0.3, harm=0.35, drift=0.3,
            centre=66, rngw=48, vel=80, pedal=1.0, rubato=0.4, reso=0,
            swing=0.08, hum=0.3, poly=16, root=0, rootlock=false, pedcc=true, step=0.5, style=0}
 
@@ -38,6 +38,11 @@ local gen
 local function nname(v) v = floor(v + 0.5) return T.PC[v % 12 + 1] .. tostring(v // 12 - 1) end
 local function pct(v) return floor(v * 100 + 0.5) .. "%" end
 
+local synced, sdiv, follow = false, 0.25, true
+local SDIV = {"1/32", "1/16", "1/8", "1/4"}
+
+local function cid(c) return type(c[1]) == "function" and c[1]() or c[1] end
+
 local NV = {"whole", "half", "qtr", "8th", "16th"}
 local function nval(v)
   local x = v * 4
@@ -46,12 +51,22 @@ local function nval(v)
 end
 
 local PAGES = {
-  {"style", {"style", "", function(v) return T.SNAMES[floor(v + 0.5)] or "?" end},
-            {"pace", "pace", function(v)
-              if synced then return floor(clock.get_tempo() + 0.5) .. " syn" end
-              return floor(v + 0.5) .. "bpm" end, 0.4}},
+  {"style", {"style", "style", function(v) return T.SNAMES[floor(v + 0.5)] or "?" end},
+            {function() return synced and "tdiv" or "pace" end,
+             function()
+               if synced then return floor(clock.get_tempo() + 0.5) .. " syn" end
+               return "pace" end,
+             function(v)
+               if synced then return SDIV[v] or "?" end
+               return floor(v + 0.5) .. "bpm" end,
+             function() return synced and 1 or 0.4 end}},
+  {"range", {"reg", "register", nname},
+            {"rngw", "width", function(v) return tostring(floor(v + 0.5)) end}},
+  {"hands", {"left", "left", function()
+              return gen and select(4, gen:info()) or "-" end},
+            {"right", "right", pct}},
   {"time",  {"swing", "swing", pct},
-            {"hum", "human", pct}},
+            {"hum", "humanize", pct}},
   {"flow",  {"motion", "motion", nval},
             {"space", "space", pct}},
   {"beat",  {"syn", "synco", pct},
@@ -59,9 +74,7 @@ local PAGES = {
   {"touch", {"len", "length", pct},
             {"pedal", "pedal", pct}},
   {"tone",  {"mode", "mode", T.mode_label},
-            {"reg", "register", nname}},
-  {"hands", {"left", function() return gen and select(4, gen:info()) or "left" end, pct},
-            {"right", "right", pct}},
+            {"stray", "stray", pct}},
   {"feel",  {"rubato", "rubato", pct},
             {"tens", "tension", pct}},
   {"shift", {"harm", "harmony", pct},
@@ -95,7 +108,6 @@ local drift_clk, rdm
 local hdr, hdr_r, hdr_m = "", nil, nil
 local toast, toast_t = nil, 0
 local TOAST = 0.85
-local synced, sdiv, follow = false, 0.25, true
 
 local function beatsec()
   if clock.get_beat_sec then return clock.get_beat_sec() end
@@ -366,6 +378,7 @@ function init()
     params:set("rep", p.rep, true)
     params:set("len", p.len, true)
     params:set("tens", p.tens, true)
+    params:set("stray", p.stray, true)
     params:set("left", p.lh, true)
     params:set("right", p.rh, true)
     params:set("harm", p.harm, true)
@@ -376,7 +389,7 @@ function init()
 
   params:add_separator("sett", "")
 
-  params:add_group("Music", 16)
+  params:add_group("Music", 17)
     params:add_option("style", "style", T.SNAMES, 1)
   params:set_action("style", function(v)
     p.style = v - 1
@@ -413,6 +426,8 @@ function init()
   params:set_action("tens", function(v) p.tens = v; dirty = true end)
   params:add_control("mode", "mode", cs.new(-5, 3, 'lin', 0, 0))
   params:set_action("mode", function(v) p.bright = v; dirty = true end)
+  params:add_control("stray", "stray", cs.new(0, 1, 'lin', 0, 0.08))
+  params:set_action("stray", function(v) p.stray = v; dirty = true end)
   params:add_number("reg", "register", 40, 92, 66)
   params:set_action("reg", function(v) p.centre = v; dirty = true end)
   params:add_control("left", "left hand", cs.new(0, 1, 'lin', 0, 0.45))
@@ -445,6 +460,7 @@ function init()
   params:add_option("sync", "tempo", {"free running", "norns clock"}, 1)
   params:set_action("sync", function(v)
     synced = v == 2
+    sdirty = true
     step_sec = synced and (beatsec() * sdiv) or (15 / params:get("pace"))
     p.step = step_sec
     dirty = true
@@ -523,7 +539,9 @@ function enc(n, d)
     pacc = 0
   else
     local c = PAGES[page][n]
-    params:delta(c[1], d * (c[4] or 1))
+    local st = c[4]
+    if type(st) == "function" then st = st() end
+    params:delta(cid(c), d * (st or 1))
   end
   sdirty = true
 end
@@ -658,13 +676,14 @@ function redraw()
 
   local pg = PAGES[page]
   local a, b = pg[2], pg[3]
-  local av, bv = params:get(a[1]), params:get(b[1])
-  cell(0, 61, type(a[2]) == "function" and a[2]() or a[2], a[3](av), nrm(a[1], av))
+  local ai, bi = cid(a), cid(b)
+  local av, bv = params:get(ai), params:get(bi)
+  cell(0, 61, type(a[2]) == "function" and a[2]() or a[2], a[3](av), nrm(ai, av))
   screen.level(1)
   screen.move(64.5, 51)
   screen.line(64.5, 62)
   screen.stroke()
-  cell(67, 61, type(b[2]) == "function" and b[2]() or b[2], b[3](bv), nrm(b[1], bv))
+  cell(67, 61, type(b[2]) == "function" and b[2]() or b[2], b[3](bv), nrm(bi, bv))
 
   local msg
   if toast then
