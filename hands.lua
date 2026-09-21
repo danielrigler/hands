@@ -1,7 +1,7 @@
 --
 --
 --
---          hands v0.03
+--          hands v0.04
 --           @dddstudio
 --
 --
@@ -24,7 +24,7 @@ local floor, random, max, min = math.floor, math.random, math.max, math.min
 local function clamp(x,a,b) if x<a then return a elseif x>b then return b else return x end end
 
 local p = {bright=0, space=0.35, motion=0.6, syn=0, rep=0.57, len=0.58, tens=0.35, stray=0.08, lh=0.45, rh=0.3, harm=0.35, drift=0.3,
-           centre=66, rngw=48, vel=80, pedal=1.0, rubato=0.4, reso=0,
+           centre=66, rngw=48, vel=80, pedal=1.0, rubato=0.4, intens=0.5,
            swing=0.08, hum=0.3, poly=16, root=0, rootlock=false, pedcc=true, step=0.5, style=0}
 
 local KEYS = {"free","C","C#","D","D#","E","F","F#","G","G#","A","A#","B"}
@@ -61,6 +61,8 @@ local PAGES = {
   {"hands", {"left", "left", function()
               return gen and select(4, gen:info()) or "-" end},
             {"right", "right", pct}},
+  {"drive", {"intens", "intensity", pct},
+            {"vel", "velocity", function(v) return tostring(floor(v + 0.5)) end}},
   {"time",  {"swing", "swing", pct},
             {"hum", "humanize", pct}},
   {"flow",  {"motion", "motion", nval},
@@ -82,6 +84,7 @@ local ch, lch = 1, 1
 local pedcc = true
 local pedco
 local own, oc = {}, {}
+local lowp, lastmel = {}, nil
 local nser, nheld, poly = 0, 0, 16
 local seq
 local running = true
@@ -120,10 +123,23 @@ local function playing(ep) return running and ep == epoch end
 
 local function steal()
   local bk, bs = nil, 1e18
-  for k, t in pairs(oc) do if t < bs then bs = t; bk = k end end
+  for k, t in pairs(oc) do
+    if lowp[k] and t < bs then bs = t; bk = k end
+  end
+  if not bk then
+    bs = 1e18
+    for k, t in pairs(oc) do
+      if k ~= lastmel and t < bs then bs = t; bk = k end
+    end
+  end
+  if not bk then
+    bs = 1e18
+    for k, t in pairs(oc) do if t < bs then bs = t; bk = k end end
+  end
   if not bk then nheld = 0; return false end
   md:note_off(bk % 200, 0, bk // 200)
-  own[bk] = nil; oc[bk] = nil
+  own[bk] = nil; oc[bk] = nil; lowp[bk] = nil
+  if lastmel == bk then lastmel = nil end
   nheld = nheld - 1
   return true
 end
@@ -131,6 +147,11 @@ end
 local function non(n, v, chn, hold)
   if n < 0 or n > 127 then return end
   local k = n + chn * 200
+  if hold then
+    if own[k] == nil then lowp[k] = true end
+  else
+    lowp[k] = nil; lastmel = k
+  end
   local c = own[k]
   if c then
     own[k] = c + 1
@@ -152,7 +173,8 @@ local function noff(n, chn)
   if not c then return end
   c = c - 1
   if c > 0 then own[k] = c; return end
-  own[k] = nil; oc[k] = nil
+  own[k] = nil; oc[k] = nil; lowp[k] = nil
+  if lastmel == k then lastmel = nil end
   nheld = nheld - 1
   md:note_off(n, 0, chn)
 end
@@ -164,12 +186,15 @@ local function pcc(v)
 end
 
 local function repedal(hold, ep)
+  if hold <= 0 or not playing(ep) then pcc(0); return end
+  local lead = min(0.14, step_sec * 0.6)
+  clock.sleep(lead)
+  if not playing(ep) then pcc(0); return end
   pcc(0)
-  if hold <= 0 or not playing(ep) then return end
-  clock.sleep(0.04)
+  clock.sleep(0.035)
   if not playing(ep) then return end
   pcc(127)
-  clock.sleep(hold)
+  clock.sleep(max(0.05, hold - lead - 0.035))
   pcc(0)
 end
 
@@ -180,6 +205,8 @@ local function panic()
   for k in pairs(own) do md:note_off(k % 200, 0, k // 200) end
   for k in pairs(own) do own[k] = nil end
   for k in pairs(oc) do oc[k] = nil end
+  for k in pairs(lowp) do lowp[k] = nil end
+  lastmel = nil
   nheld = 0
 end
 
@@ -193,14 +220,6 @@ local function log(e)
   if c > 4 then c = 4 end
   h.k = c
   for j = 1, c do h[j] = e.n[j] end
-end
-
-local function echo(n, v, chn, dly, dur, ep)
-  clock.sleep(dly)
-  if not playing(ep) then return end
-  non(n, v, chn, true)
-  clock.sleep(dur)
-  noff(n, chn)
 end
 
 local function voice(e)
@@ -236,16 +255,6 @@ local function voice(e)
   else
     for i = 1, cnt do non(n[i], vs and vs[i] or e.v, chn, hold) end
   end
-  local b = e.b
-  if b then
-    local rs = p.reso
-    local v, d = e.v, 0
-    for i = 1, #b do
-      v = max(30, floor(v * (0.74 + 0.14 * rs)))
-      d = d + 0.12 + random() * step_sec * (1.1 + 3.2 * rs)
-      clock.run(echo, b[i], v, chn, d, min(90, dur * (0.5 + random() * 0.55)), ep)
-    end
-  end
   clock.sleep(max(0.03, dur - (st > 0 and st * (cnt - 1) or 0)))
   for i = 1, cnt do noff(n[i], chn) end
 end
@@ -262,7 +271,8 @@ local function tick()
       if pedcc and gen.newchord and gen.barn > 0 then
         if pedco then clock.cancel(pedco) end
         pedco = clock.run(repedal,
-          max(0, p.pedal - 0.5) * 2 * gen.hr * gen.bl * step_sec * 0.94 - 0.04, epoch)
+          max(0, p.pedal - 0.5) * 2 * gen.hr * gen.bl * step_sec * 0.94
+            * (1 - 0.5 * (gen.dens or 0.3)) - 0.04, epoch)
       end
     end
     local l = gen.ev[gen.tick + 1]
@@ -332,7 +342,7 @@ function init()
   build_devs()
 
   params:add_separator("act", "")
-  
+
   params:add_trigger("newp", "New Piece")
   params:set_action("newp", function()
     if gen then gen:reroll(false); say("new piece") end
@@ -351,20 +361,17 @@ function init()
       params:set("pace", clamp(sd.pace * (0.86 + random() * 0.3), 6, 200), true)
       params:set("pedal", j(sd.pedal, 0.14), true)
       params:set("rubato", j(sd.rubato, 0.15), true)
-      params:set("reso", j(sd.reso, 0.15), true)
       params:set("reg", clamp(60 + random(13), 40, 92), true)
     else
       params:set("pace", 8 + random() ^ 2 * 120, true)
       params:set("pedal", random() ^ 0.7, true)
       params:set("rubato", random() * 0.8, true)
-      params:set("reso", random() * 0.6, true)
       params:set("reg", 52 + random(28), true)
     end
     step_sec = 15 / params:get("pace")
     p.step = step_sec
     p.pedal = params:get("pedal")
     p.rubato = params:get("rubato")
-    p.reso = params:get("reso")
     p.centre = params:get("reg")
     gen:reroll(true)
     params:set("mode", p.bright, true)
@@ -385,7 +392,7 @@ function init()
 
   params:add_separator("sett", "")
 
-  params:add_group("Music", 17)
+  params:add_group("Music", 18)
     params:add_option("style", "style", T.SNAMES, 1)
   params:set_action("style", function(v)
     p.style = v - 1
@@ -436,10 +443,12 @@ function init()
     p.harm = v
     dirty = true
   end)
+  params:add_control("intens", "intensity", cs.new(0, 1, 'lin', 0, 0.5))
+  params:set_action("intens", function(v) p.intens = v; dirty = true end)
   params:add_control("drift", "drift", cs.new(0, 1, 'lin', 0, 0.3))
   params:set_action("drift", function(v) p.drift = v; dirty = true end)
 
-  params:add_group("Feel", 5)
+  params:add_group("Feel", 4)
   params:add_control("pedal", "pedal", cs.new(0, 1, 'lin', 0, 1.0))
   params:set_action("pedal", function(v) p.pedal = v end)
   params:add_control("swing", "swing", cs.new(0, 1, 'lin', 0, 0.08))
@@ -448,9 +457,6 @@ function init()
   params:set_action("hum", function(v) p.hum = v end)
   params:add_control("rubato", "rubato", cs.new(0, 1, 'lin', 0, 0.4))
   params:set_action("rubato", function(v) p.rubato = v end)
-  params:add_control("reso", "resonance", cs.new(0, 1, 'lin', 0, 0))
-  params:set_action("reso", function(v) p.reso = v; dirty = true end)
-
 
   params:add_group("Clock", 3)
   params:add_option("sync", "tempo", {"free running", "norns clock"}, 1)
