@@ -5,9 +5,7 @@ accompaniment and sends them out to whatever you have plugged in.
 Free-running by default, and it can follow the norns clock instead.
 
 It has three engines. **classic** is a two-hands piano player. **ambient** is a
-chord engine in the spirit of Higher Plane's SpaceWalk: slowly evolving,
-voice-led chord pads on up to four voices, with an optional floating melody
-on top. **loops** is a set of phasing tape loops. Hold K1 and turn E1 to switch.
+chord engine. Slowly evolving, voice-led chord pads on up to four voices, with an optional floating melody on top. **loops** is a set of phasing tape loops. Hold K1 and turn E1 to switch.
 
 <img src="https://raw.githubusercontent.com/danielrigler/hands/refs/heads/main/screenshot.png">
 
