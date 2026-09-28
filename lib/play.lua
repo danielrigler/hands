@@ -352,6 +352,9 @@ function P:runbar(sl, ctx)
   local ns = sl.n
   if ns <= 0 then return 0 end
   if ns > MAXS then ns = MAXS end
+  if self.pn < g.split - 4 or self.pn > g.hi + 4 then
+    self:rehand(clamp(floor(ctx.target or self.pn), g.split, g.hi))
+  end
 
   local tgt = self:planbar(ctx)
   local A, B = self.A, self.B
@@ -364,6 +367,7 @@ function P:runbar(sl, ctx)
   local nb = 1
 
   local strk = 1.6 + 2.4 * (1 - (g.p.tens or 0.35))
+  local done = ns
 
   for i = 1, ns do
     local ms = sl.ms[i] or 0.5
@@ -392,7 +396,7 @@ function P:runbar(sl, ctx)
         pf2[np] = rf; psh[np] = rsh; pst[np] = strain; pnl[np] = rnl
       end
     end
-    if np == 0 then break end
+    if np == 0 then done = i - 1; break end
 
     local keep = min(W, np)
     for slot = 1, keep do
@@ -417,13 +421,14 @@ function P:runbar(sl, ctx)
       for q = 1, i - 1 do dp[q] = sp[q]; df[q] = sf[q]; ds[q] = ss[q]; dh[q] = sh[q] end
       dp[i] = n; df[i] = f; ds[i] = strain; dh[i] = shift > 0
     end
-    if keep <= 0 then break end
+    if keep <= 0 then done = i - 1; break end
     A, B = B, A
     nb = keep
   end
 
   self.A, self.B = A, B
-  if nb <= 0 then return 0 end
+  ns = done
+  if nb <= 0 or ns <= 0 then return 0 end
 
   local bv = -1e9
   for w = 1, nb do
