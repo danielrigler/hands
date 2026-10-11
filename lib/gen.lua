@@ -66,16 +66,24 @@ function G.new(p)
   o.ssig, o.flatsig, o.sfsig = 0, -1, -1
   o.bo = 0
   o.progdirty = false
-  o.vo, o.pvo = {}, {}
+  o.vo = {}
   o.calt, o.caltd, o.altpc, o.lastalt, o.cd7 = 0, -1, 0, -1, -1
   o.play = PL.new(o)
   o.rhtex, o.txp, o.sdyn = 1, 0.4, 0
   o.slots = {n = 0, tk = {}, ms = {}, gap = {}, want = {}, ww = {},
-             anch = {}, tgt = {}, du = {}, k = {}, last = {}}
+             anch = {}, tgt = {}, du = {}, k = {}, last = {}, cx = {}, split = false}
   o.pctx = {ms = 0.5, target = 60, cad = false, close = 0, apex = false,
             want = nil, wantw = 0, gapsec = 0.25}
   o.vn, o.mlow = 0, 127
   o.croot, o.binv, o.lhprev = 0, 1, nil
+  o.lup, o.lref, o.lhx = {}, {}, {}
+  for i = 1, 12 do o.lhx[i] = false end
+  o.ready = false
+  o.ctx = {{cpc = o.cpc, ct = o.ct, chw = o.chw, vo = o.vo, lhx = o.lhx, lref = o.lref},
+           {cpc = {}, ct = {}, chw = {}, vo = {}, lhx = {}, lref = {}}}
+  for i = 1, 12 do o.ctx[2].lhx[i] = false; o.ctx[2].cpc[i] = false end
+  o.cxi, o.sp, o.aend, o.bend, o.qa, o.qb = 1, nil, 17, 17, "", nil
+  o.antin, o.antout, o.psplit, o.bw2 = false, false, false, {}
   o.struct, o.mlead, o.ovl = true, 0.1, 0.12
   o:derive()
   o:reroll(false)
@@ -365,6 +373,42 @@ function G:dna(d)
   return self.root + 12 * (d // 7) + self:sdeg(d)
 end
 
+local CS = {"cdeg", "shape", "altpc", "qual", "lhbase", "croot", "binv", "calt", "caltd", "cd7", "cdomf"}
+
+function G:usectx(k)
+  local c0 = self.cxi
+  if c0 == k then return end
+  local a, b = self.ctx[c0], self.ctx[k]
+  for i = 1, #CS do
+    local f = CS[i]
+    a[f] = self[f]
+    self[f] = b[f]
+  end
+  self.cpc, self.ct, self.chw, self.vo, self.lhx, self.lref = b.cpc, b.ct, b.chw, b.vo, b.lhx, b.lref
+  self.cxi = k
+end
+
+function G:ctxat(t)
+  if self.sp then self:usectx(t >= self.sp and 2 or 1) end
+end
+
+function G:setchord(pr)
+  local shi = self:shape_for(pr)
+  local calt = pr[6] or 0
+  self.calt, self.caltd, self.cd7 = calt, (pr[1] + 2) % 7, -1
+  self.cdomf = pr[7] ~= nil
+  if pr[7] then
+    local s, d = self.s, pr[1]
+    local r = s[d % 7 + 1]
+    if (s[(d + 2) % 7 + 1] - r) % 12 == 3 then self.calt = 1 end
+    if (s[(d + 6) % 7 + 1] - r) % 12 == 11 then self.cd7 = (d + 6) % 7 end
+  end
+  self.finv = pr.inv
+  self:build_chord(pr[1], shi)
+  self.finv = nil
+  return shi
+end
+
 function G:build_chord(deg, shi)
   local shape = T.SHAPES[shi].o
   self.cdeg = deg
@@ -398,16 +442,21 @@ function G:build_chord(deg, shi)
   local r = T.R12[a % 12 + 1]
   if t3 == 3 then r = r:lower() end
   if t5 == 6 then r = r .. "\u{b0}" elseif t5 == 8 then r = r .. "+" end
-  self.qual = T.PC[(self.root + a) % 12 + 1] .. q .. " " .. r
+  local qn = T.PC[(self.root + a) % 12 + 1] .. q
   local tgt = self.p.centre + self.coct
   local top = clamp(floor(self.cbase) - 12, self.lhtop, floor(self.p.centre) + 4)
   local bi = (self.newchord or not ct[self.binv]) and self:pick_inv(r0, tgt, top) or self.binv
+  if self.finv and ct[self.finv] then bi = self.finv end
   if not ct[bi] then bi = 1 end
   local b = self:bassfold(r0 + ct[bi], tgt, top)
+  self.qual = qn .. (bi ~= 1 and ("/" .. T.PC[b % 12 + 1]) or "") .. " " .. r
   self.lhbase = b
   self.croot = b - ct[bi]
   self.binv = bi
   if self.newchord then self.lhprev = b end
+  local lu, lr = self.lup, self.lref
+  for i = 1, #lu do lr[i] = lu[i] end
+  for i = #lr, #lu + 1, -1 do lr[i] = nil end
   self:voice_chord()
 end
 
@@ -469,54 +518,127 @@ local function minint(n)
   return 2
 end
 
-local function stack(vo, pv, ct, n, base, bi, r0, top)
-  local last, k = base, 1
-  local rootin = false
-  for i = 1, n do
-    if i ~= bi then
-      local x = r0 + ct[i]
-      local ref = pv[i] or (base + 4 + max(0, i - 2) * 4)
-      x = x + 12 * floor((ref - x) / 12 + 0.5)
-      local gap = minint(last)
-      while x < last + gap do x = x + 12 end
-      while x > top and x - 12 >= last + gap do x = x - 12 end
-      while x - last > 16 and x - 12 >= last + gap do x = x - 12 end
+local VC, VN = {{}, {}, {}, {}}, {0, 0, 0, 0}
+local VP, VS, VB, VR = {}, {}, {}, {}
+local PRI1, PRIV = {2, 4, 5, 3}, {1, 2, 4, 5, 3}
+local V = {bc = 1e9, n = 0, base = 0, ctr = 0, rn = 0}
+
+local function vtry(k, sz)
+  if k <= sz then
+    local a = VC[k]
+    for i = 1, VN[k] do VP[k] = a[i]; vtry(k + 1, sz) end
+    return
+  end
+  for i = 1, sz do VS[i] = VP[i] end
+  for i = 2, sz do
+    local x, j = VS[i], i - 1
+    while j >= 1 and VS[j] > x do VS[j + 1] = VS[j]; j = j - 1 end
+    VS[j + 1] = x
+  end
+  local last, cost = V.base, 0
+  for i = 1, sz do
+    local x = VS[i]
+    local g = x - last
+    if g < minint(last) then return end
+    if i > 1 and g > 9 then cost = cost + (g - 9) * 0.35 end
+    last = x
+  end
+  local g0 = VS[1] - V.base
+  if g0 > 16 then cost = cost + (g0 - 16) * 0.3 end
+  local ref, rn = V.ref, V.rn
+  if rn > 0 then
+    local vl = 0
+    if rn == sz then
+      for i = 1, sz do vl = vl + abs(VS[i] - ref[i]) end
+    else
+      for i = 1, sz do
+        local m = 99
+        for j = 1, rn do local d = abs(VS[i] - ref[j]); if d < m then m = d end end
+        vl = vl + m
+      end
+      for j = 1, rn do
+        local m = 99
+        for i = 1, sz do local d = abs(VS[i] - ref[j]); if d < m then m = d end end
+        vl = vl + m
+      end
+      vl = vl * 0.5 + 0.5
+    end
+    cost = cost + vl + abs(VS[sz] - ref[rn]) * 0.4
+  end
+  local sum = 0
+  for i = 1, sz do sum = sum + VS[i] end
+  cost = cost + abs(sum / sz - V.ctr) * (rn > 0 and 0.12 or 0.35) + random() * 0.6
+  if cost < V.bc then
+    V.bc, V.n = cost, sz
+    for i = 1, sz do VB[i] = VS[i] end
+  end
+end
+
+function G:vlead(vo, ct, n, base, bi, r0, top)
+  local pri = bi == 1 and PRI1 or PRIV
+  local lo = base + minint(base)
+  local nr = 0
+  for j = 1, #pri do
+    local i = pri[j]
+    if i <= n and i ~= bi and nr < 4 then
+      local x = base + 1 + (r0 + ct[i] - base - 1) % 12
+      while x < lo do x = x + 12 end
       if x <= top then
-        k = k + 1
-        vo[k] = x
-        pv[i] = x
-        last = x
-        if i == 1 then rootin = true end
+        nr = nr + 1
+        VR[nr] = i
+        local a, c = VC[nr], 0
+        while x <= top do c = c + 1; a[c] = x; x = x + 12 end
+        VN[nr] = c
+      elseif i == 1 then
+        return false
       end
     end
   end
-  return rootin
+  if nr == 0 then return bi == 1 end
+  V.base, V.ref, V.rn = base, self.lref, #self.lref
+  V.ctr = (lo + top) * 0.5
+  for sz = nr, 1, -1 do
+    V.bc = 1e9
+    vtry(1, sz)
+    if V.bc < 1e9 then
+      local lu = self.lup
+      for i = 1, V.n do vo[i + 1] = VB[i]; lu[i] = VB[i] end
+      for i = #lu, V.n + 1, -1 do lu[i] = nil end
+      return true
+    end
+  end
+  return bi == 1
 end
 
 function G:voice_chord()
-  local ct, vo, pv = self.ct, self.vo, self.pvo
+  local ct, vo = self.ct, self.vo
   local n = #ct
   local base = self.lhbase
   local mel = (self.mlow or 127) - 2
   if base + 7 > mel and base - 12 >= self.lo then base = base - 12 end
   for i = #vo, 1, -1 do vo[i] = nil end
   vo[1] = base
-  if n < 2 then return end
-  local top = self.split + 4
-  local m = floor(self.cbase) - 2
-  if m < top then top = m end
-  if top < base + 7 then top = base + 7 end
-  if mel < top then top = mel end
-  local r0 = (self.croot or base) + (base - self.lhbase)
-  local bi = self.binv or 1
-  if stack(vo, pv, ct, n, base, bi, r0, top) or bi == 1 then return end
-  local rr = r0 + 12 * floor((base - r0) / 12)
-  if rr < self.lo then return end
-  for i = #vo, 1, -1 do vo[i] = nil end
-  base = rr
-  vo[1] = base
-  if top < base + 7 then top = base + 7 end
-  stack(vo, pv, ct, n, base, 1, r0, top)
+  if n >= 2 then
+    local top = max(self.split + 4, base + 16)
+    local m = floor(self.cbase) - 2
+    if m < top then top = m end
+    if top < base + 7 then top = base + 7 end
+    if mel < top then top = mel end
+    local r0 = (self.croot or base) + (base - self.lhbase)
+    local bi = self.binv or 1
+    if not self:vlead(vo, ct, n, base, bi, r0, top) and bi ~= 1 then
+      local rr = r0 + 12 * floor((base - r0) / 12)
+      if rr >= self.lo then
+        for i = #vo, 1, -1 do vo[i] = nil end
+        vo[1] = rr
+        if top < rr + 7 then top = rr + 7 end
+        self:vlead(vo, ct, n, rr, 1, r0, top)
+      end
+    end
+  end
+  local x, r = self.lhx, self.root
+  for i = 1, 12 do x[i] = false end
+  for i = 1, #vo do x[(vo[i] + 1 - r) % 12 + 1] = true end
 end
 
 local MIXO = {0, 2, 4, 5, 7, 9, 10}
@@ -939,7 +1061,7 @@ function G:ped(d, tk, hand)
   if pd < 0.5 then return d * (0.4 + 1.2 * pd) + ov end
   if self.p.pedcc then return d + ov end
   local x = (pd - 0.5) * 2 * self.pedb * (hand == 1 and 1 or 0.62)
-  local room = self.hr * bl - self.choff - tk + 1 + x * 0.7
+  local room = ((self.sp and tk >= self.sp) and self.bend or self.aend) - tk + x * 0.7
   local cap = room + bl * 0.3
   if d > cap then d = cap end
   if x <= 0.01 or room <= d then return d + ov end
@@ -999,13 +1121,49 @@ function G:left_hand(flat, pos, cad, rhn, rhm)
   if nh == 0 and rhn > 0 and fk ~= 0 then
     nh = 1; hits[1] = fi; hits[-1] = fk
   end
-  self:voice_chord()
-  local top = self.vo[#self.vo] or (self.split + 4)
+  if self.antin and nh > 0 and hits[1] == 1 then
+    for j = 1, nh - 1 do hits[j] = hits[j + 1]; hits[-j] = hits[-(j + 1)] end
+    hits[nh], hits[-nh] = nil, nil
+    nh = nh - 1
+  end
+  local sp = self.sp
+  local adur = bl + 1
+  if sp then
+    if self.antout then
+      while nh > 0 and hits[nh] > sp do hits[nh], hits[-nh] = nil, nil; nh = nh - 1 end
+      local f = bl
+      for i = 1, bl - 1 do if pat.f(i, i // 4, i % 4, nb) ~= 0 then f = i; break end end
+      adur = bl + 1 + f
+    end
+    local at = 0
+    for j = 1, nh do if hits[j] == sp then at = j end end
+    if at == 0 then
+      local k = (self.antout or fk == 0) and -1 or (fk >= 150 and 200 or (fk < 0 and -1 or 1))
+      local j = nh
+      while j >= 1 and hits[j] > sp do hits[j + 1] = hits[j]; hits[-(j + 1)] = hits[-j]; j = j - 1 end
+      hits[j + 1], hits[-(j + 1)] = sp, k
+      nh = nh + 1
+    elseif hits[-at] >= 150 and hits[-at] < 250 then
+      hits[-at] = 200
+    end
+    self:usectx(1)
+    self:voice_chord()
+    local a, b = self.lup, self.ctx[2].lref
+    for i = 1, #a do b[i] = a[i] end
+    for i = #b, #a + 1, -1 do b[i] = nil end
+    self:usectx(2)
+    self:voice_chord()
+    self:usectx(1)
+  else
+    self:voice_chord()
+  end
   local ar = 0.72 + 0.28 * self.art
   for j = 1, nh do
     local tk = hits[j]
     local k = hits[-j]
-    local nxt = (j < nh) and hits[j+1] or (bl + 1)
+    if sp then self:usectx(tk >= sp and 2 or 1) end
+    local top = self.vo[#self.vo] or (self.split + 4)
+    local nxt = (j < nh) and hits[j+1] or ((sp and tk == sp and self.antout) and adur or (bl + 1))
     local base = self:vel(tk, rhm[tk] == 1 and 5 or 0, 1)
     local e = newev(tk, max(0.6, (nxt - tk) * ar), base, 1)
     e.o = self:lag(1)
@@ -1039,6 +1197,7 @@ function G:left_hand(flat, pos, cad, rhn, rhm)
     end
     flat[#flat+1] = e
   end
+  if sp then self:usectx(1) end
 end
 
 function G:ornament(flat, ev, pn, tk)
@@ -1152,6 +1311,7 @@ function G:render_motif(flat, m, tr, cad, final, dens, apex)
           or (tk + 2)
         sn = sn + 1
         sl.tk[sn] = tk
+        sl.cx[sn] = (self.sp and tk >= self.sp) and 2 or 1
         sl.ms[sn] = (self.M[tk] - 1) * 0.25
         sl.gap[sn] = max(1, ntk - tk) * self.step
         sl.want[sn] = self:fold(self:near(self:dn(anchor + d) + oct))
@@ -1164,6 +1324,7 @@ function G:render_motif(flat, m, tr, cad, final, dens, apex)
     end
   end
   sl.n = sn
+  sl.split = self.sp ~= nil
   if sn == 0 then return end
 
   local cx = self.pctx
@@ -1177,7 +1338,9 @@ function G:render_motif(flat, m, tr, cad, final, dens, apex)
   local pl = self.play
   local got = pl:runbar(sl, cx)
 
+  local split = sl.split
   for q = 1, got do
+    if split then self:usectx(sl.cx[q]) end
     local tk = sl.tk[q]
     local pn = pl.outn[q]
     local fg, strain, shifted = pl.outf[q], pl.outs[q], pl.outsh[q]
@@ -1213,6 +1376,22 @@ function G:render_motif(flat, m, tr, cad, final, dens, apex)
       prevn, prevtk = pn, tk
     end
   end
+  if split then self:usectx(1) end
+end
+
+function G:seatsplit(flat)
+  local sp, M, bl = self.sp, self.M, self.bl
+  if not sp then return end
+  self:usectx(2)
+  for i = 1, #flat do
+    local e = flat[i]
+    local t, x = e.t, e.n[1]
+    if e.h == 0 and not e.g and x and t >= sp and t <= bl and (M[t] >= 2 or self.antout) then
+      local q = self:snapc(x)
+      if q ~= x and abs(q - x) <= 2 then e.n[1] = q end
+    end
+  end
+  self:usectx(1)
 end
 
 function G:gen_bar(flat, sec, pos, cad, final, bi, plen)
@@ -1259,6 +1438,7 @@ function G:gen_bar(flat, sec, pos, cad, final, bi, plen)
       flat[ln] = c
       self:emit(c.n[1])
     end
+    self:seatsplit(flat)
     self:hands(flat, pos, cad, rhm)
     return
   end
@@ -1291,6 +1471,7 @@ function G:gen_bar(flat, sec, pos, cad, final, bi, plen)
         while nx <= bl and mask[nx] == 0 do nx = nx + 1 end
         sn = sn + 1
         sl.tk[sn] = i
+        sl.cx[sn] = (self.sp and i >= self.sp) and 2 or 1
         sl.ms[sn] = ms
         sl.gap[sn] = (min(nx, bl + 1) - i) * self.step
         sl.want[sn] = nil
@@ -1303,6 +1484,7 @@ function G:gen_bar(flat, sec, pos, cad, final, bi, plen)
       end
     end
     sl.n = sn
+    sl.split = self.sp ~= nil
     local cx = self.pctx
     cx.target = btg
     cx.cad = cad
@@ -1313,6 +1495,7 @@ function G:gen_bar(flat, sec, pos, cad, final, bi, plen)
     cx.apxpos = self.apxpos
     local got = pl:runbar(sl, cx)
     for q = 1, got do
+      if sl.split then self:usectx(sl.cx[q]) end
       local i = sl.tk[q]
       local pn = pl.outn[q]
       local fg, strain, shifted = pl.outf[q], pl.outs[q], pl.outsh[q]
@@ -1328,6 +1511,7 @@ function G:gen_bar(flat, sec, pos, cad, final, bi, plen)
       flat[#flat+1] = e
       self:ornament(flat, e, pn, i)
     end
+    if sl.split then self:usectx(1) end
   else
     local m = self.motif[slot] or self.motif[(slot - 1) % 2 + 1]
     local tr = self:pick_transform()
@@ -1373,9 +1557,11 @@ function G:thicken(flat)
   local tx = self.rhtex or 1
   local lo = self.split - 2
   local apex = self.bdyn > self.vrange * 0.2
+  local sp = self.sp
   for i = 1, #flat do
     local e = flat[i]
     if e.h == 0 and not e.g and e.n[1] then
+      if sp then self:usectx(e.t >= sp and 2 or 1) end
       if e.tx then
         for q = #e.n, 2, -1 do e.n[q] = nil end
         local vs = e.vs
@@ -1416,6 +1602,7 @@ function G:thicken(flat)
       end
     end
   end
+  if sp then self:usectx(1) end
 end
 
 function G:hands(flat, pos, cad, rhm)
@@ -1474,26 +1661,51 @@ function G:bar_begin()
     self.progdirty = false
     self:build_prog(self.pstyle or 1)
   end
-  local ci = bi // self.hr % #self.prog + 1
-  local nx = self.prog[(bi + 1) // self.hr % #self.prog + 1]
+  local prog, hr = self.prog, self.hr
+  local np = #prog
+  local ci = bi // hr % np + 1
+  local nx = prog[(bi + 1) // hr % np + 1]
   self.nxd = nx and nx[1] or 0
-  local pr = self.prog[ci]
-  local shi = self:shape_for(pr)
-  local calt = pr[6] or 0
-  local same = (self.lastdeg == pr[1] and self.lastsh == shi and self.lastalt == calt)
-  self.newchord = not same
-  self.choff = (bi % self.hr) * bl
-  self.lastdeg, self.lastsh, self.lastalt = pr[1], shi, calt
-  self.struct = (pos == 0) or last or final
-  self.calt, self.caltd, self.cd7 = calt, (pr[1] + 2) % 7, -1
-  self.cdomf = pr[7] ~= nil
-  if pr[7] then
-    local s, d = self.s, pr[1]
-    local r = s[d % 7 + 1]
-    if (s[(d + 2) % 7 + 1] - r) % 12 == 3 then self.calt = 1 end
-    if (s[(d + 6) % 7 + 1] - r) % 12 == 11 then self.cd7 = (d + 6) % 7 end
+  local pr = prog[ci]
+  local bpos = bi % hr
+  local send = (hr - bpos) * bl + 1
+  local A, B, sp, aend, ant = pr, nil, nil, send, false
+  local hd, tl = pr.hd, pr.tl
+  if hd then
+    local hb = hr * bl // 2
+    local s0 = bpos * bl
+    if s0 + bl <= hb then A, aend = hd, hb - s0 + 1
+    elseif s0 < hb then A, B, sp = hd, pr, hb - s0 + 1; aend = sp end
+  elseif tl and bpos == hr - 1 and tl.at and tl.at >= 2 and tl.at <= bl then
+    sp, aend, ant = tl.at, tl.at, tl.ant == true
+    B = ant and prog[ci % np + 1] or tl
   end
-  self:build_chord(pr[1], shi)
+  self.sp, self.aend = sp, aend
+  self.bend = ant and (send + hr * bl) or send
+  self.choff = bpos * bl
+  self.struct = (pos == 0) or last or final
+  self:usectx(1)
+  local shi = self:shape_for(A)
+  local calt = A[6] or 0
+  local same = (self.lastdeg == A[1] and self.lastsh == shi and self.lastalt == calt)
+  self.newchord = not same
+  self.antin = self.antout and same
+  self.antout = ant
+  self:setchord(A)
+  self.qa, self.qb = self.qual, nil
+  if B then
+    self.newchord = true
+    self:usectx(2)
+    shi = self:setchord(B)
+    calt = B[6] or 0
+    self.qb = self.qual
+    self:usectx(1)
+    self.newchord = not same
+  end
+  self.lastdeg, self.lastsh, self.lastalt = (B or A)[1], shi, calt
+  local split = B ~= nil
+  same = same and not split and not self.psplit
+  self.psplit = split
 
   local flat = self.flat
   self.conseq = last and pos > 0 and #self.sflat > 0 and random() < self.song * 0.55
@@ -1550,6 +1762,7 @@ function G:bar_begin()
   self.barn = np
   self.lastsil = np == 0
   self.melsil = nm == 0
+  self.ready = true
 end
 
 function G:refit(flat)
@@ -1594,12 +1807,15 @@ function G:reseat(flat, pos, cad)
       flat[w] = e
       local t = e.t
       local ms = (t >= 1 and t <= bl) and self.M[t] or 1
-      if e.n[1] and ms >= 3 and not e.g then
+      local sb = self.sp and t >= self.sp
+      if e.n[1] and (ms >= 3 or (sb and (ms >= 2 or self.antout))) and not e.g then
+        self:ctxat(t)
         local q = self:snapc(e.n[1])
         if q ~= e.n[1] and abs(q - e.n[1]) <= 2 then e.n[1] = q end
       end
     end
   end
+  self:usectx(1)
   for i = #flat, w + 1, -1 do flat[i] = nil end
   local rhm = self.rhm
   for i = 1, bl do rhm[i] = 0 end
@@ -1611,12 +1827,20 @@ function G:advance()
   if self.tick >= self.bl then
     self.tick = 0
     self.bar = self.bar + 1
+    self.ready = false
   end
 end
 
 function G:reset()
+  self:usectx(1)
   self.bar, self.tick, self.div = 0, 0, 0
   self.lhprev, self.binv = nil, 1
+  self.ready, self.cq, self.sp = false, nil, nil
+  self.antin, self.antout, self.psplit = false, false, false
+  for i = #self.lup, 1, -1 do self.lup[i] = nil end
+  for i = #self.lref, 1, -1 do self.lref[i] = nil end
+  local r2 = self.ctx[2].lref
+  for i = #r2, 1, -1 do r2[i] = nil end
   if self.play then
     self.play:rehand(floor(self.p.centre))
     self.play:newphrase(self.p.centre)
@@ -1631,7 +1855,7 @@ end
 
 function G:shape_for(pr)
   local base = pr[2]
-  if self.plane then return base end
+  if self.plane or pr.fix then return base end
   local w, w0 = self.wb, self.wb0
   local ns = #T.SHAPES
   local bt = clamp(self.bn * 0.55 + self.cx * 0.3, -0.7, 0.9)
@@ -1679,7 +1903,7 @@ function G:build_prog(style)
     local dom = sst.dom and 1 or nil
     for i = 1, n do pr[i] = {L[(i - 1) % #L + 1], random(#T.SHAPES), nil, nil, nil, nil, dom} end
   else
-  local fix = {}
+  local fix, cad = {}, {}
   if style ~= 5 and style ~= 6 then
     local cp = 0.15 + 0.55 * self.p.harm + 0.28 * self.song
     local mid = self.nsec // 2
@@ -1690,6 +1914,7 @@ function G:build_prog(style)
         if must or random() < cp then
           local pre = (s == self.nsec) and 4 or (random() < 0.6 and 4 or 3)
           fix[idx] = pre
+          cad[idx] = pre
           if idx < n and not fix[idx + 1] then
             if pre == 4 then fix[idx + 1] = (random() < 0.82) and 0 or 5
             else fix[idx + 1] = (random() < 0.62) and 4 or 0 end
@@ -1741,6 +1966,7 @@ function G:build_prog(style)
       d = T.wpick(w, 7) - 1
     end
     pr[i] = {d, (style == 6 and ph) or random(#T.SHAPES)}
+    pr[i].cad = cad[i]
   end
   end
   local sd = clamp((self.p.harm or 0) - 0.55, 0, 0.45) * 1.8
@@ -1758,6 +1984,77 @@ function G:build_prog(style)
   end
   self.pstyle = style
   self.harmb = self.p.harm
+  self:embellish()
+end
+
+local HXD = {0.8, 1.0, 0.4, 0.6}
+
+function G:passing(c, nx)
+  local s = self.s
+  local d = (nx[1] - c[1]) % 7
+  local at = self.bl - 3
+  if d == 1 then
+    local x = (nx[1] + 4) % 7
+    if (s[(nx[1] + 4) % 7 + 1] - s[nx[1] % 7 + 1]) % 12 ~= 7 then return nil end
+    if (s[(x + 4) % 7 + 1] - s[x % 7 + 1]) % 12 ~= 7 then return nil end
+    return {x, 2, nil, nil, nil, nil, 1, fix = true, inv = 2, at = at}
+  elseif d == 3 or d == 5 then
+    if d == 3 and (s[nx[1] % 7 + 1] - s[c[1] % 7 + 1]) % 12 ~= 5 then return nil end
+    local r = s[c[1] % 7 + 1]
+    local maj = (s[(c[1] + 2) % 7 + 1] - r) % 12 == 4
+    return {c[1], 2, nil, nil, nil, nil, (d == 3 and maj) and 1 or nil, fix = true, inv = 4, at = at}
+  end
+  return nil
+end
+
+function G:bridge(c, nx)
+  local s, W, w = self.s, T.CLASSIC, self.bw2
+  local a, b = c[1], nx[1]
+  local tot = 0
+  for x = 0, 6 do
+    local v = 0
+    if x ~= a and x ~= b and (s[(x + 4) % 7 + 1] - s[x % 7 + 1]) % 12 == 7 then
+      v = W[a + 1][x + 1] * W[x + 1][b + 1]
+    end
+    w[x + 1] = v
+    tot = tot + v
+  end
+  if tot <= 0 then return nil end
+  return {T.wpick(w, 7) - 1, random(#T.SHAPES), at = self.bl // 2 + 1}
+end
+
+function G:embellish()
+  local pr = self.prog
+  local n = #pr
+  for i = 1, n do pr[i].hd, pr[i].tl = nil, nil end
+  if self.plane or n < 2 then return end
+  local hx = T.HX[self.p.style or 0] or HXD
+  local h = self.p.harm or 0.35
+  local hr, bps = self.hr, self.bps
+  for i = 1, n do
+    local c, nx = pr[i], pr[i % n + 1]
+    local cd = c.cad
+    local r = random()
+    if cd == 4 and r < (0.25 + 0.6 * h) * hx[2] then
+      local q = random()
+      if q < 0.4 then c.hd = {1, c[2]}
+      elseif q < 0.65 then c.hd = {3, c[2]}
+      else c.hd = {0, 1, fix = true, inv = 3} end
+    elseif cd == 3 and r < (0.2 + 0.5 * h) * hx[2] then
+      c.hd = {random() < 0.5 and 5 or 0, c[2]}
+    elseif nx[1] ~= c[1] then
+      local fr = ((i * hr - 1) % bps + 1) / bps
+      local pa = (0.03 + 0.3 * h) * hx[4]
+      local pb = (0.04 + 0.26 * h) * hx[3]
+      local pc = (0.03 + 0.3 * h) * hx[1] * (0.3 + 0.9 * fr)
+      local k = pa + pb + pc
+      if k > 0.7 then pa, pb, pc = pa * 0.7 / k, pb * 0.7 / k, pc * 0.7 / k end
+      local x = random()
+      if x < pa then c.tl = self:passing(c, nx)
+      elseif x < pa + pb then c.tl = {ant = true, at = self.bl - 1}
+      elseif x < pa + pb + pc then c.tl = self:bridge(c, nx) end
+    end
+  end
 end
 
 function G:set_meter(bl)
@@ -1994,7 +2291,7 @@ function G:info()
     self.ikey = k
     self.iname = (T.MODE[b] or "?") .. T.INFL[self.infl + 1]
   end
-  return T.PC[self.root + 1], self.iname, self.qual,
+  return T.PC[self.root + 1], self.iname, self.cq or self.qual,
          self.lhon and self.lhpat.n or "solo"
 end
 

@@ -1,7 +1,7 @@
 --
 --
 --
---          hands v0.10
+--          hands v0.12
 --           @dddstudio
 --
 --
@@ -24,7 +24,7 @@ local Update = include('lib/update')
 local cs = require 'controlspec'
 local tab = require 'tabutil'
 
-local floor, random, max, min = math.floor, math.random, math.max, math.min
+local floor, random, max, min, sin, PI = math.floor, math.random, math.max, math.min, math.sin, math.pi
 local function clamp(x,a,b) if x<a then return a elseif x>b then return b else return x end end
 
 local p = {bright=0, space=0.35, motion=0.6, syn=0, rep=0.57, len=0.58, tens=0.35, stray=0.08, lh=0.45, rh=0.3, harm=0.35, drift=0.3,
@@ -180,6 +180,7 @@ local drift_clk, rdm
 local restyle = false
 local hdr, hdr_r, hdr_m = "", nil, nil
 local toast, toast_t = nil, 0
+local tf = 1
 local TOAST = 0.85
 
 local function beatsec()
@@ -303,78 +304,125 @@ end
 
 local function voice(e)
   local ep = epoch
+  local en = e.n
+  local cnt = #en
+  if cnt == 0 then return end
   local chn = e.c or ((e.h == 1) and lch or ch)
-  if e.o > 0 then
-    clock.sleep(e.o * step_sec)
+  local ss = step_sec * tf
+  local o, d, r, v, vs, hold = e.o, e.d, e.r, e.v, e.vs, e.h == 1
+  local st = (e.s or 0) * ss * 0.35
+  local n1 = en[1]
+  local n, vc
+  if cnt > 1 then
+    n = {table.unpack(en, 1, cnt)}
+    if vs then vc = {table.unpack(vs, 1, cnt)} end
+  end
+  if o > 0 then
+    clock.sleep(o * ss)
     if not playing(ep) then return end
   end
-  local n = {table.unpack(e.n)}
-  local cnt = #n
-  if e.r > 1 then
-    local sub = e.d * step_sec / e.r
-    for j = 1, e.r do
+  if r > 1 then
+    local sub = d * ss / r
+    for j = 1, r do
       if not playing(ep) then return end
-      non(n[1], max(1, e.v - (j - 1) * 9), chn)
+      non(n1, max(1, v - (j - 1) * 9), chn)
       clock.sleep(sub * 0.72)
       if ep ~= epoch then return end
-      noff(n[1], chn)
-      if j < e.r then clock.sleep(sub * 0.28) end
+      noff(n1, chn)
+      if j < r then clock.sleep(sub * 0.28) end
     end
     return
   end
-  local dur = min(150, max(0.03, e.d * step_sec * (1 + (random() - 0.5) * p.hum * 0.28)))
-  local st = (e.s or 0) * step_sec * 0.35
-  local hold = e.h == 1
-  local vs = e.vs
-  if st > 0 and cnt > 1 then
+  local dur = min(150, max(0.03, d * ss * (1 + (random() - 0.5) * p.hum * 0.28)))
+  if cnt == 1 then
+    non(n1, v, chn, hold)
+    clock.sleep(dur)
+    if ep == epoch then noff(n1, chn) end
+    return
+  end
+  if st > 0 then
     for i = 1, cnt do
       if not playing(ep) then break end
-      non(n[i], vs and vs[i] or e.v, chn, hold)
+      non(n[i], vc and vc[i] or v, chn, hold)
       if i < cnt then clock.sleep(st) end
     end
   else
-    for i = 1, cnt do non(n[i], vs and vs[i] or e.v, chn, hold) end
+    for i = 1, cnt do non(n[i], vc and vc[i] or v, chn, hold) end
   end
   clock.sleep(max(0.03, dur - (st > 0 and st * (cnt - 1) or 0)))
   if ep ~= epoch then return end
   for i = 1, cnt do noff(n[i], chn) end
 end
 
+local function padend(e, ep)
+  while true do
+    local r = e.te - util.time()
+    if r <= 0.003 then break end
+    clock.sleep(r)
+    if ep ~= epoch or e.cut then e.dead = true; return end
+  end
+  if ep == epoch and not e.cut then noff(e.n, e.c) end
+  e.dead = true
+end
+
 local function pad(e)
   local ep = epoch
   if e.o > 0 then clock.sleep(e.o) end
-  if playing(ep) and not e.cut then
-    non(e.n, e.v, e.c, not e.mel)
-    e.on = true
-    while true do
-      local r = e.te - util.time()
-      if r <= 0 or not playing(ep) then break end
-      local w = e.mel and 0.05 or 0.25
-      clock.sleep(r < w and r or w)
-    end
-    if ep == epoch and not e.cut then noff(e.n, e.c) end
+  if not playing(ep) or e.cut then e.dead = true; return end
+  non(e.n, e.v, e.c, not e.mel)
+  e.on = true
+  padend(e, ep)
+end
+
+local function prep()
+  if restyle then restyle = false; gen:reroll(false); clear_roll() end
+  if dirty then
+    gen:derive(); gen:update_scale(); gen:update_lut(); gen:plan_registers(); dirty = false
   end
-  e.dead = true
+  gen:bar_begin()
+end
+
+local function agogic(t)
+  local R = p.rubato
+  if synced or R < 0.02 then return 1 end
+  local bps, bl = gen.bps, gen.bl
+  local bi = gen.bar % (gen.nsec * bps)
+  local u = ((bi % bps) * bl + t + 0.5) / (bps * bl)
+  local f = 1 + R * (0.05 - 0.1 * sin(PI * u))
+  if u > 0.86 then
+    local x = (u - 0.86) / 0.14
+    f = f + R * x * x * ((bi // bps == gen.nsec - 1) and 0.5 or 0.24)
+  end
+  return f
+end
+
+local function wait(nxt, d)
+  nxt = nxt + d
+  local w = nxt - util.time()
+  if w < -step_sec then nxt = util.time(); w = 0 end
+  clock.sleep(w > 0.001 and w or 0.001)
+  return nxt
 end
 
 local function tick()
   if synced then clock.sync(1) end
-  tlast = util.time()
+  local nxt = util.time()
+  tlast = nxt
   while true do
-    if gen.tick == 0 then
-      if restyle then restyle = false; gen:reroll(false); clear_roll() end
-      if dirty then
-        gen:derive(); gen:update_scale(); gen:update_lut(); gen:plan_registers(); dirty = false
-      end
-      gen:bar_begin()
-      if pedcc and gen.newchord and gen.barn > 0 then
+    local t = gen.tick
+    if t == 0 and not gen.ready then prep() end
+    tf = agogic(t)
+    local cs = t == 0 and gen.aend - 1 or ((gen.sp and t == gen.sp - 1) and gen.bend - gen.sp or nil)
+    if cs then
+      gen.cq = t == 0 and gen.qa or gen.qb
+      if pedcc and (t > 0 or gen.newchord) and gen.barn > 0 then
         if pedco then clock.cancel(pedco) end
         pedco = clock.run(repedal,
-          max(0, p.pedal - 0.5) * 2 * gen.hr * gen.bl * step_sec * 0.94
+          max(0, p.pedal - 0.5) * 2 * cs * step_sec * tf * 0.94
             * (1 - 0.5 * (gen.dens or 0.3)) - 0.04, epoch)
       end
     end
-    local l = gen.ev[gen.tick + 1]
+    local l = gen.ev[t + 1]
     for i = 1, #l do
       local e = l[i]
       if not e.g or random() < 0.8 then
@@ -382,13 +430,14 @@ local function tick()
         log(e)
       end
     end
-    ctick = gen.tick
-    local t4 = gen.tick % 4
+    ctick = t
+    local t4 = t % 4
     local s8 = gen.s8
     local lng = s8 and t4 < 2 or (not s8 and t4 % 2 == 0)
     gen:advance()
+    if gen.tick == 0 then prep() end
     local f = p.swing / 3
-    slen = step_sec * (lng and (1 + f) or (1 - f))
+    slen = step_sec * tf * (lng and (1 + f) or (1 - f))
     if synced then
       local st = beatsec() * sdiv
       if math.abs(st - step_sec) > step_sec * 0.02 then
@@ -399,8 +448,9 @@ local function tick()
       clock.sync(sdiv)
       local dl = s8 and ((t4 == 1 or t4 == 2) and 2 * f or 0) or (lng and f or 0)
       if dl > 0.001 then clock.sleep(step_sec * dl) end
+      nxt = util.time()
     else
-      clock.sleep(slen)
+      nxt = wait(nxt, slen)
     end
     gstep = gstep + 1
     tlast = util.time()
@@ -409,7 +459,9 @@ end
 
 local function tick_eng()
   if synced then clock.sync(1) end
-  tlast = util.time()
+  local nxt = util.time()
+  tlast = nxt
+  tf = 1
   local E = EN[eng]
   while true do
     E:tick(step_sec)
@@ -420,7 +472,7 @@ local function tick_eng()
       clock.sync(sdiv)
     else
       slen = step_sec
-      clock.sleep(step_sec)
+      nxt = wait(nxt, step_sec)
     end
     gstep = gstep + 1
     tlast = util.time()
@@ -467,6 +519,7 @@ end
 local function set_engine(v)
   if v == eng then return end
   eng = v
+  tf = 1
   if not lp then return end
   if seq then clock.cancel(seq); seq = nil end
   panic()
@@ -845,12 +898,19 @@ function init()
   params:bang()
   gen:derive(); gen:reroll(false)
   sp = Amb.new(q, {
-    pad = function(e) clock.run(pad, e) end,
+    pad = function(e) e.co = clock.run(pad, e) end,
     note = function(e) clock.run(voice, e) end,
     cut = function(e)
       if e.dead or e.cut then return end
       e.cut = true
       if e.on then noff(e.n, e.c) end
+      if e.co then clock.cancel(e.co); e.co = nil end
+      e.dead = true
+    end,
+    retime = function(e)
+      if e.dead or e.cut or not e.on or not e.co then return end
+      clock.cancel(e.co)
+      e.co = clock.run(padend, e, epoch)
     end,
   })
   lp = Loops.new(lq, {note = function(e) clock.run(voice, e) end}, Amb.MODES)
@@ -932,6 +992,27 @@ local function cell(x, w, nm, val, v)
   screen.fill()
 end
 
+local BK = {}
+for i = 0, 15 do BK[i] = {n = 0} end
+local function brect(lv, x, y, w, h)
+  local b = BK[lv > 15 and 15 or lv]
+  local n = b.n
+  b[n + 1], b[n + 2], b[n + 3], b[n + 4] = x, y, w, h
+  b.n = n + 4
+end
+local function bflush()
+  for lv = 0, 15 do
+    local b = BK[lv]
+    local n = b.n
+    if n > 0 then
+      screen.level(lv)
+      for i = 1, n, 4 do screen.rect(b[i], b[i + 1], b[i + 2], b[i + 3]) end
+      screen.fill()
+      b.n = 0
+    end
+  end
+end
+
 local PP = {}
 local function nrm(id, v)
   local pp = PP[id]
@@ -982,20 +1063,16 @@ local function draw_classic()
         if x + w > 127 then w = 127 - x end
         if w > 0 and x < 127 then
           if h.h == 1 then
-            screen.level(2 + floor(clamp((h.v - blo) * bsc, 0, 1) * 6 + 0.5))
-            for j = 1, h.k do
-              screen.rect(x, floor(clamp(42 - (h[j] - lo) * sp, 10, 42)), w, 1)
-              screen.fill()
-            end
+            local lv = 2 + floor(clamp((h.v - blo) * bsc, 0, 1) * 6 + 0.5)
+            for j = 1, h.k do brect(lv, x, floor(clamp(42 - (h[j] - lo) * sp, 10, 42)), w, 1) end
           else
-            screen.level(6 + floor(clamp((h.v - alo) * asc, 0, 1) * 9 + 0.5))
-            screen.rect(x, floor(clamp(42 - (h.n - lo) * sp, 10, 42)) - 1, w, 2)
-            screen.fill()
+            brect(6 + floor(clamp((h.v - alo) * asc, 0, 1) * 9 + 0.5), x, floor(clamp(42 - (h.n - lo) * sp, 10, 42)) - 1, w, 2)
           end
         end
       end
     end
   end
+  bflush()
   screen.aa(0)
   screen.level(running and 5 or 2)
   screen.move(126.5, 9)
@@ -1010,10 +1087,9 @@ local function draw_classic()
   local bl = gen.bl
   local tw = 124 / bl
   for i = 0, bl - 1 do
-    screen.level(i == ctick and 15 or (i % 4 == 0 and 5 or 1))
-    screen.rect(i * tw, 46, i == ctick and tw - 1 or 2, 2)
-    screen.fill()
+    brect(i == ctick and 15 or (i % 4 == 0 and 5 or 1), i * tw, 46, i == ctick and tw - 1 or 2, 2)
   end
+  bflush()
 end
 
 local function draw_ambient()
@@ -1069,38 +1145,36 @@ local function draw_ambient()
     for v = 0, U do
       local nt = v == 0 and c.vb or c.vu[v]
       local vl = sp:vel(c, v)
-      screen.level(vl <= 0 and 1 or (2 + floor(clamp((vl - blo) * bsc, 0, 1) * 6 + 0.5) + (cur and 4 or 0)))
-      screen.rect(xa, y(nt), max(1, xb - xa), 1)
-      screen.fill()
+      brect(vl <= 0 and 1 or (2 + floor(clamp((vl - blo) * bsc, 0, 1) * 6 + 0.5) + (cur and 4 or 0)), xa, y(nt), max(1, xb - xa), 1)
     end
-    if i > w0 then
-      local pc = prog[i - 1]
-      local pU = #pc.vu
-      screen.level(2)
-      for v = 0, U do
-        local a = v == 0 and pc.vb or pc.vu[floor((v - 1) * (pU - 1) / max(1, U - 1) + 0.5) + 1]
-        local b = v == 0 and c.vb or c.vu[v]
-        if a and a ~= b then
-          screen.move(xa + 0.5, y(a) + 0.5)
-          screen.line(xa + 0.5, y(b) + 0.5)
-          screen.stroke()
-        end
+    brect(cur and 15 or (c.kind > 0 and 6 or 2), xa, 46, max(1, xb - xa - 1), 2)
+  end
+  bflush()
+  local lk = false
+  for i = w0 + 1, w1 do
+    local c, pc = prog[i], prog[i - 1]
+    local xa = floor((st[i] - ws) * sx)
+    local U, pU = #c.vu, #pc.vu
+    for v = 0, U do
+      local a = v == 0 and pc.vb or pc.vu[floor((v - 1) * (pU - 1) / max(1, U - 1) + 0.5) + 1]
+      local b = v == 0 and c.vb or c.vu[v]
+      if a and a ~= b then
+        if not lk then screen.level(2); lk = true end
+        screen.move(xa + 0.5, y(a) + 0.5)
+        screen.line(xa + 0.5, y(b) + 0.5)
       end
     end
-    screen.level(cur and 15 or (c.kind > 0 and 6 or 2))
-    screen.rect(xa, 46, max(1, xb - xa - 1), 2)
-    screen.fill()
   end
+  if lk then screen.stroke() end
   for i = 1, #mn do
     local b = mn[i]
     if b.p >= ws and b.p < ws + span then
       local x = floor((b.p - ws) * sx)
       local on = running and p0 >= b.p and p0 < b.p + b.d
-      screen.level(on and 15 or (5 + floor(clamp((sp:mvel(b) - alo) * asc, 0, 1) * 7 + 0.5)))
-      screen.rect(x, y(b.n) - 1, max(2, floor(b.d * sx)), 2)
-      screen.fill()
+      brect(on and 15 or (5 + floor(clamp((sp:mvel(b) - alo) * asc, 0, 1) * 7 + 0.5)), x, y(b.n) - 1, max(2, floor(b.d * sx)), 2)
     end
   end
+  bflush()
   local px = floor((p0 - ws) * sx) + 0.5
   if px >= 0 and px <= 128 then
     screen.level(running and 5 or 2)
@@ -1114,6 +1188,7 @@ local function draw_ambient()
   screen.stroke()
 end
 
+local PCS, PCL = {}, {}
 local function draw_loops()
   local L = lp.lp
   local n = #L
@@ -1127,48 +1202,45 @@ local function draw_loops()
   end
   local y0 = 9 + floor((33 - bh) / 2)
   local ph = h - nh >= 2 and 1 or 0
+  for k = 0, 11 do PCS[k], PCL[k] = false, false end
   for i = 1, n do
     local l = L[i]
     local ny = y0 + (n - i) * h
     local sx = 128 / l.len
     local sw = lp:swell(l)
-    screen.level(1)
-    screen.rect(0, ny + floor(nh / 2), 128, 1)
-    screen.fill()
-    for _, x in ipairs(l.notes) do
-      local on = running and x.on > gs
-      screen.level(on and 15 or (2 + floor(x.v * sw * 8 + 0.5)))
+    brect(1, 0, ny + floor(nh / 2), 128, 1)
+    local N = l.notes
+    for j = 1, #N do
+      local x = N[j]
+      PCL[x.n % 12] = true
+      local lv = (running and x.on > gs) and 15 or (2 + floor(x.v * sw * 8 + 0.5))
       local xa, w = floor(x.t * sx), max(1, floor(x.d * sx + 0.5))
-      screen.rect(xa, ny, min(w, 128 - xa), nh)
-      screen.fill()
-      if xa + w > 128 then
-        screen.rect(0, ny, xa + w - 128, nh)
-        screen.fill()
-      end
+      brect(lv, xa, ny, min(w, 128 - xa), nh)
+      if xa + w > 128 then brect(lv, 0, ny, xa + w - 128, nh) end
     end
-    local px = floor(((running and (l.pos - 1 + fr) or l.pos) % l.len) * sx)
-    screen.level(running and 8 or 3)
-    screen.rect(px, ny - ph, 1, nh + ph * 2)
-    screen.fill()
   end
+  bflush()
+  local phl = running and 8 or 3
+  for i = 1, n do
+    local l = L[i]
+    local ny = y0 + (n - i) * h
+    local px = floor(((running and (l.pos - 1 + fr) or l.pos) % l.len) * 128 / l.len)
+    brect(phl, px, ny - ph, 1, nh + ph * 2)
+  end
+  bflush()
   screen.level(alt and 7 or 1)
   screen.move(0, 44.5)
   screen.line(128, 44.5)
   screen.stroke()
   local pool, snd, R = lp.pool, lp.snd, lp.root
+  for j = 1, #snd do PCS[snd[j].n % 12] = true end
   for k = 0, 11 do
     local pc = (R + k) % 12
     local lv = pool[pc] and (pool[pc] == 1 and 7 or 4) or 1
-    for _, s in ipairs(snd) do if s.n % 12 == pc then lv = 15; break end end
-    if lv < 4 then
-      for _, l in ipairs(L) do
-        for _, x in ipairs(l.notes) do if x.n % 12 == pc then lv = 2 end end
-      end
-    end
-    screen.level(lv)
-    screen.rect(floor(k * 128 / 12), 46, 9, 2)
-    screen.fill()
+    if PCS[pc] then lv = 15 elseif lv < 4 and PCL[pc] then lv = 2 end
+    brect(lv, floor(k * 128 / 12), 46, 9, 2)
   end
+  bflush()
 end
 
 function redraw()

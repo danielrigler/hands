@@ -13,15 +13,6 @@ local MAXS = 34
 
 local function clamp(x, a, b) if x < a then return a elseif x > b then return b else return x end end
 
-local function mkbeams()
-  local b = {pn = {}, li = {}, li2 = {}, hlo = {}, pf = {}, sc = {},
-             path = {}, fing = {}, strn = {}, shft = {}}
-  for w = 1, W do
-    b.path[w], b.fing[w], b.strn[w], b.shft[w] = {}, {}, {}, {}
-  end
-  return b
-end
-
 function P.new(g)
   local o = setmetatable({}, P)
   o.g = g
@@ -30,11 +21,16 @@ function P.new(g)
   o.anchor, o.lastanch = 60, 60
   o.hiw, o.low = 76, 52
   o.climax, o.climaxed = 80, false
-  o.A, o.B = mkbeams(), mkbeams()
+  o.A = {pn = {}, li = {}, li2 = {}, hlo = {}, pf = {}, sc = {}}
+  o.B = {pn = {}, li = {}, li2 = {}, hlo = {}, pf = {}, sc = {}}
+  o.bw, o.bn, o.bf, o.bs, o.bh = {}, {}, {}, {}, {}
+  for i = 1, MAXS do o.bw[i], o.bn[i], o.bf[i], o.bs[i], o.bh[i] = {}, {}, {}, {}, {} end
+  o.path = {}
   o.cand = {}
   o.pv, o.pw, o.pc = {}, {}, {}
   o.pf2, o.psh, o.pst, o.pnl = {}, {}, {}, {}
   o.outn, o.outf, o.outs, o.outsh = {}, {}, {}, {}
+  o.lockw, o.tens, o.song, o.stray, o.altpc, o.clw = 1, 0.35, 0.5, 0, 0, 1
   return o
 end
 
@@ -62,13 +58,45 @@ local function dnct(g, n)
   return n - 12
 end
 
+local G_
+local UCS, DCS = {{}, {}}, {{}, {}}
+local US, DS, UC, DC = {}, {}, UCS[1], DCS[1]
+local function us(n) local x = US[n]; if not x then x = upstep(G_, n); US[n] = x end; return x end
+local function ds(n) local x = DS[n]; if not x then x = dnstep(G_, n); DS[n] = x end; return x end
+local function uc(n) local x = UC[n]; if not x then x = upct(G_, n); UC[n] = x end; return x end
+local function dc(n) local x = DC[n]; if not x then x = dnct(G_, n); DC[n] = x end; return x end
+
 local function isct(g, n) return g.cpc[(n - g.root) % 12 + 1] end
-local function insc(g, n) return g.insc[(n - g.root) % 12 + 1] end
 
 local function nearct(g, x)
   if isct(g, x) then return x end
-  local u, d = upct(g, x), dnct(g, x)
+  local u, d = uc(x), dc(x)
   return (u - x <= x - d) and u or d
+end
+
+function P:prime()
+  local g = self.g
+  G_ = g
+  for k in pairs(US) do US[k] = nil end
+  for k in pairs(DS) do DS[k] = nil end
+  for j = 1, 2 do
+    local a, b = UCS[j], DCS[j]
+    for k in pairs(a) do a[k] = nil end
+    for k in pairs(b) do b[k] = nil end
+  end
+  UC, DC = UCS[1], DCS[1]
+  local tn = g.p.tens or 0.35
+  self.lockw = 0.5 + 0.5 * (g.lock or 1) / 2.6
+  self.tens = tn
+  self.song = g.song or 0.5
+  self.stray = g.stray or 0
+  self.altpc = g.altpc or 0
+  self.clw = 1.2 - 0.6 * tn
+end
+
+function P:memo(k)
+  UC, DC = UCS[k], DCS[k]
+  self.altpc = self.g.altpc or 0
 end
 
 function P:reach(hlo, pf, ppn, n, gapsec)
@@ -114,7 +142,8 @@ function P:reach(hlo, pf, ppn, n, gapsec)
     local av = gapsec or 0.25
     if need > av then strain = clamp((need - av) / need, 0, 1) end
   end
-  local rr = abs(n - ppn)
+  local rr = n - ppn
+  if rr < 0 then rr = -rr end
   if rr > 12 and shift == 0 then strain = clamp(strain + (rr - 12) * 0.1, 0, 1) end
 
   return f, shift, strain, nlo
@@ -169,104 +198,115 @@ function P:planbar(ctx)
     want = t
   end
 
-  local best, bs = nearct(g, floor(want)), -1e9
-  local c = dnct(g, floor(want) + 1)
+  local fw = floor(want)
+  local best, bs = nearct(g, fw), -1e9
+  local c = dc(fw + 1)
+  local la = self.lastanch
   for _ = 1, 4 do
     if c >= g.split and c <= g.hi then
-      local s = -abs(c - want) * 0.5 - abs(c - self.lastanch) * 0.25
-      if abs(c - self.lastanch) <= 4 then s = s + 1.2 end
-      if c == self.lastanch then s = s - 1.6 end
+      local s = -abs(c - want) * 0.5 - abs(c - la) * 0.25
+      if abs(c - la) <= 4 then s = s + 1.2 end
+      if c == la then s = s - 1.6 end
       if s > bs then bs = s; best = c end
     end
-    c = upct(g, c)
+    c = uc(c)
   end
   self.anchor = best
   return best
 end
 
-local function add(c, k, x, lo, hi, pn)
-  if x < lo or x > hi then return k end
-  local d = x - pn
+local C, SEEN, ST, LO, HI, PN = nil, {}, 0, 0, 0, 0
+
+local function add(k, x)
+  if x < LO or x > HI then return k end
+  local d = x - PN
   if d > 16 or d < -16 then return k end
-  for i = 1, k do if c[i] == x then return k end end
-  k = k + 1; c[k] = x
+  if SEEN[x] == ST then return k end
+  SEEN[x] = ST
+  k = k + 1
+  C[k] = x
   return k
 end
 
-local function nearpc(c, k, pn, pc, lo, hi)
-  local b = pn - (pn - pc) % 12
-  k = add(c, k, b, lo, hi, pn)
-  return add(c, k, b + 12, lo, hi, pn)
+local function nearpc(k, pc)
+  local b = PN - (PN - pc) % 12
+  k = add(k, b)
+  return add(k, b + 12)
 end
 
 function P:cands(pn, tgt, ctx)
   local g = self.g
-  local c, k = self.cand, 0
-  local lo, hi = g.split, g.hi
+  C, LO, HI, PN = self.cand, g.split, g.hi, pn
+  ST = ST + 1
+  if ST > 1e9 then ST = 1; for x in pairs(SEEN) do SEEN[x] = nil end end
+  local k = 0
+  local u0, d0 = us(pn), ds(pn)
+  k = add(k, u0)
+  k = add(k, d0)
+  k = add(k, us(u0))
+  k = add(k, ds(d0))
+  k = add(k, pn)
 
-  k = add(c, k, upstep(g, pn), lo, hi, pn)
-  k = add(c, k, dnstep(g, pn), lo, hi, pn)
-  k = add(c, k, upstep(g, upstep(g, pn)), lo, hi, pn)
-  k = add(c, k, dnstep(g, dnstep(g, pn)), lo, hi, pn)
-  k = add(c, k, pn, lo, hi, pn)
-
-  local u1, d1 = upct(g, pn), dnct(g, pn)
-  k = add(c, k, u1, lo, hi, pn)
-  k = add(c, k, d1, lo, hi, pn)
-  local u2, d2 = upct(g, u1), dnct(g, d1)
-  k = add(c, k, u2, lo, hi, pn)
-  k = add(c, k, d2, lo, hi, pn)
-  k = add(c, k, upct(g, u2), lo, hi, pn)
-  k = add(c, k, dnct(g, d2), lo, hi, pn)
+  local u1, d1 = uc(pn), dc(pn)
+  k = add(k, u1)
+  k = add(k, d1)
+  local u2, d2 = uc(u1), dc(d1)
+  k = add(k, u2)
+  k = add(k, d2)
+  k = add(k, uc(u2))
+  k = add(k, dc(d2))
 
   if tgt then
-    k = add(c, k, tgt, lo, hi, pn)
-    k = add(c, k, tgt > pn and dnstep(g, tgt) or upstep(g, tgt), lo, hi, pn)
+    k = add(k, tgt)
+    k = add(k, tgt > pn and ds(tgt) or us(tgt))
   end
 
-  if (g.stray or 0) > 0.02 then
-    if isct(g, pn + 1) then k = add(c, k, pn + 1, lo, hi, pn) end
-    if isct(g, pn - 1) then k = add(c, k, pn - 1, lo, hi, pn) end
-    k = add(c, k, u1 - 1, lo, hi, pn)
+  if self.stray > 0.02 then
+    if isct(g, pn + 1) then k = add(k, pn + 1) end
+    if isct(g, pn - 1) then k = add(k, pn - 1) end
+    k = add(k, u1 - 1)
   end
 
-  local ap = g.altpc or 0
-  if ap > 0 then k = nearpc(c, k, pn, (ap - 1 + g.root) % 12, lo, hi) end
+  local ap = self.altpc
+  if ap > 0 then k = nearpc(k, (ap - 1 + g.root) % 12) end
 
   if ctx.cad then
-    k = nearpc(c, k, pn, g.root % 12, lo, hi)
-    k = nearpc(c, k, pn, (g.root + g.s[3]) % 12, lo, hi)
+    k = nearpc(k, g.root % 12)
+    k = nearpc(k, (g.root + g.s[3]) % 12)
   end
 
   return k
 end
 
-function P:step(n, pn, li, li2, ms, ctx, tgt, dist)
+function P:step(n, pn, li, li2, ms, tgt, dist)
   local g = self.g
   local iv = n - pn
-  local a = abs(iv)
+  local a = iv < 0 and -iv or iv
   local s = 0
-  local ct = isct(g, n)
+  local cpc = g.cpc
+  local ix = (n - g.root) % 12 + 1
+  local ct = cpc[ix]
 
-  local lockw = 0.5 + 0.5 * (g.lock or 1) / 2.6
   if ct then
-    s = s + (0.85 + 1.5 * ms) * lockw
-  elseif insc(g, n) then
+    s = s + (0.85 + 1.5 * ms) * self.lockw
+  elseif g.insc[ix] then
     local stepin = a >= 1 and a <= 2
     local samedir = li ~= 0 and (iv > 0) == (li > 0)
     if stepin and samedir then s = s + 0.8 - 0.95 * ms
     elseif stepin and li ~= 0 then s = s + 0.62 - 0.85 * ms
-    elseif a >= 3 and ms >= 0.5 then s = s + (0.2 + 0.9 * (g.p.tens or 0.35)) - 0.5 * ms
+    elseif a >= 3 and ms >= 0.5 then s = s + (0.2 + 0.9 * self.tens) - 0.5 * ms
     else s = s - 0.55 - 1.2 * ms end
   else
-    local ap = (g.altpc or 0) > 0 and ((n - g.root) % 12 + 1) == g.altpc
-    if ap then s = s + 0.7 + 0.5 * ms
-    elseif a <= 3 and ((isct(g, n + 1) and li <= 0) or (isct(g, n - 1) and li >= 0)) then
-      s = s + (g.stray or 0) * 1.7 - 0.7 - 0.9 * ms
+    local ap = self.altpc
+    if ap > 0 and ix == ap then s = s + 0.7 + 0.5 * ms
+    elseif a <= 3 and ((cpc[ix % 12 + 1] and li <= 0) or (cpc[(ix - 2) % 12 + 1] and li >= 0)) then
+      s = s + self.stray * 1.7 - 0.7 - 0.9 * ms
     else s = s - 3.2 end
   end
 
-  local song = g.song or 0.5
+  if g.lhx[ix] then s = s - (0.55 + 2.4 * ms) * self.clw end
+
+  local song = self.song
   if a == 0 then
     s = s - 0.5 - 0.7 * song
     if li == 0 then s = s - 1.4 end
@@ -285,11 +325,12 @@ function P:step(n, pn, li, li2, ms, ctx, tgt, dist)
     if li ~= 0 and (iv > 0) ~= (li > 0) then s = s + 0.55 end
   end
 
-  if abs(li) >= 5 then
+  local al = li < 0 and -li or li
+  if al >= 5 then
     if (iv > 0) ~= (li > 0) and a <= 2 then s = s + 1.2
     elseif (iv > 0) == (li > 0) and a >= 3 then s = s - 1.1 end
   end
-  if abs(li) >= 4 and a >= 4 and (iv > 0) == (li > 0) and abs(li + iv) > 12 then
+  if al >= 4 and a >= 4 and (iv > 0) == (li > 0) and abs(li + iv) > 12 then
     s = s - 1.3
   end
 
@@ -315,13 +356,14 @@ function P:barscore(path, np, ctx, tgt)
   local hi, lo = path[1], path[1]
   local last, prev = 0, 0
   for i = 2, np do
-    local d = path[i] - path[i - 1]
+    local x = path[i]
+    local d = x - path[i - 1]
     if d ~= 0 and last ~= 0 and (d > 0) ~= (last > 0) then turns = turns + 1 end
     if d ~= 0 then last = d end
     if d == prev and d ~= 0 then same = same + 1 end
     prev = d
-    if path[i] > hi then hi = path[i] end
-    if path[i] < lo then lo = path[i] end
+    if x > hi then hi = x end
+    if x < lo then lo = x end
   end
 
   s = s - abs(turns - (1 + np * 0.2)) * 0.36
@@ -355,42 +397,62 @@ function P:runbar(sl, ctx)
   if self.pn < g.split - 4 or self.pn > g.hi + 4 then
     self:rehand(clamp(floor(ctx.target or self.pn), g.split, g.hi))
   end
+  local scx = sl.split and sl.cx or nil
+  if scx then g:usectx(1) end
+  self:prime()
 
   local tgt = self:planbar(ctx)
+  local tg1, tg2, curk = tgt, nil, 1
+  if scx then
+    g:usectx(2); self:memo(2)
+    tg2 = nearct(g, tgt)
+    g:usectx(1); self:memo(1)
+  end
   local A, B = self.A, self.B
   local pv, pw, pc = self.pv, self.pw, self.pc
   local pf2, psh, pst, pnl = self.pf2, self.psh, self.pst, self.pnl
+  local bw, bn, bf, bs, bh = self.bw, self.bn, self.bf, self.bs, self.bh
+  local cand = self.cand
   local anch = sl.anch
+  local sms, sgap, swant, sww = sl.ms, sl.gap, sl.want, sl.ww
 
   A.pn[1], A.li[1], A.li2[1] = self.pn, self.li, self.li2
   A.hlo[1], A.pf[1], A.sc[1] = self.hlo, self.pf, 0
   local nb = 1
 
-  local strk = 1.6 + 2.4 * (1 - (g.p.tens or 0.35))
+  local strk = 1.6 + 2.4 * (1 - self.tens)
   local done = ns
 
   for i = 1, ns do
-    local ms = sl.ms[i] or 0.5
-    local gap = sl.gap[i] or 0.2
-    local want = sl.want[i]
-    local ww = sl.ww[i] or 0
+    if scx and scx[i] ~= curk then
+      curk = scx[i]
+      g:usectx(curk); self:memo(curk)
+      tgt = curk == 2 and tg2 or tg1
+    end
+    local ms = sms[i] or 0.5
+    local gap = sgap[i] or 0.2
+    local want = swant[i]
+    local ww = sww[i] or 0
     local isa = anch and anch[i]
     local dist = ns - i + 1
     local slotgt = (isa or i == ns) and tgt or nil
+    local abon = 1.3 + 1.2 * ms
 
     local np = 0
+    local Apn, Ali, Ali2, Ahlo, Apf, Asc = A.pn, A.li, A.li2, A.hlo, A.pf, A.sc
     for w = 1, nb do
-      local k = self:cands(A.pn[w], tgt, ctx)
+      local apn, ahlo, apf, ali, ali2, asc = Apn[w], Ahlo[w], Apf[w], Ali[w], Ali2[w], Asc[w]
+      local k = self:cands(apn, tgt, ctx)
       for ci = 1, k do
-        local n = self.cand[ci]
-        local rf, rsh, strain, rnl = self:reach(A.hlo[w], A.pf[w], A.pn[w], n, gap)
-        local s = A.sc[w] + self:step(n, A.pn[w], A.li[w], A.li2[w], ms, ctx, slotgt, dist)
-          - strain * strk
+        local n = cand[ci]
+        local rf, rsh, strain, rnl = self:reach(ahlo, apf, apn, n, gap)
+        local s = asc + self:step(n, apn, ali, ali2, ms, slotgt, dist) - strain * strk
         if want then
-          local wd = abs(n - want)
+          local wd = n - want
+          if wd < 0 then wd = -wd end
           s = s + (wd == 0 and ww or (ww * (1 - min(1, wd / 5)) - 0.1 * wd))
         end
-        if isa and n == tgt then s = s + 1.3 + 1.2 * ms end
+        if isa and n == tgt then s = s + abon end
         np = np + 1
         pv[np] = s; pw[np] = w; pc[np] = n
         pf2[np] = rf; psh[np] = rsh; pst[np] = strain; pnl[np] = rnl
@@ -399,6 +461,8 @@ function P:runbar(sl, ctx)
     if np == 0 then done = i - 1; break end
 
     local keep = min(W, np)
+    local Bw, Bn, Bf, Bs, Bh = bw[i], bn[i], bf[i], bs[i], bh[i]
+    local Bpn, Bli, Bli2, Bhlo, Bpf, Bsc = B.pn, B.li, B.li2, B.hlo, B.pf, B.sc
     for slot = 1, keep do
       local bv, bidx = -1e9, 0
       for j = 1, np do
@@ -407,19 +471,13 @@ function P:runbar(sl, ctx)
       if bidx == 0 then keep = slot - 1; break end
       local w, n = pw[bidx], pc[bidx]
       pv[bidx] = -1e9
-      local f, shift, strain, nlo = pf2[bidx], psh[bidx], pst[bidx], pnl[bidx]
-      B.pn[slot] = n
-      B.li[slot] = n - A.pn[w]
-      B.li2[slot] = A.li[w]
-      B.hlo[slot] = nlo
-      B.pf[slot] = f
-      B.sc[slot] = bv
-      local sp, dp = A.path[w], B.path[slot]
-      local sf, df = A.fing[w], B.fing[slot]
-      local ss, ds = A.strn[w], B.strn[slot]
-      local sh, dh = A.shft[w], B.shft[slot]
-      for q = 1, i - 1 do dp[q] = sp[q]; df[q] = sf[q]; ds[q] = ss[q]; dh[q] = sh[q] end
-      dp[i] = n; df[i] = f; ds[i] = strain; dh[i] = shift > 0
+      Bpn[slot] = n
+      Bli[slot] = n - Apn[w]
+      Bli2[slot] = Ali[w]
+      Bhlo[slot] = pnl[bidx]
+      Bpf[slot] = pf2[bidx]
+      Bsc[slot] = bv
+      Bw[slot] = w; Bn[slot] = n; Bf[slot] = pf2[bidx]; Bs[slot] = pst[bidx]; Bh[slot] = psh[bidx] > 0
     end
     if keep <= 0 then done = i - 1; break end
     A, B = B, A
@@ -427,44 +485,52 @@ function P:runbar(sl, ctx)
   end
 
   self.A, self.B = A, B
+  if scx then g:usectx(1) end
   ns = done
   if nb <= 0 or ns <= 0 then return 0 end
 
+  local path = self.path
   local bv = -1e9
+  local sc = A.sc
   for w = 1, nb do
-    A.sc[w] = A.sc[w] / ns + self:barscore(A.path[w], ns, ctx, tgt)
-    if A.sc[w] > bv then bv = A.sc[w] end
+    local x = w
+    for i = ns, 1, -1 do path[i] = bn[i][x]; x = bw[i][x] end
+    sc[w] = sc[w] / ns + self:barscore(path, ns, ctx, tgt)
+    if sc[w] > bv then bv = sc[w] end
   end
   local temp = 0.2 + 0.5 * (g.tvar or 0.5) + 0.3 * (g.cx or 0.3)
   local tot = 0
   for w = 1, nb do
-    A.sc[w] = exp((A.sc[w] - bv) / temp)
-    tot = tot + A.sc[w]
+    sc[w] = exp((sc[w] - bv) / temp)
+    tot = tot + sc[w]
   end
   local r = random() * tot
   local best = 1
   for w = 1, nb do
-    r = r - A.sc[w]
+    r = r - sc[w]
     if r <= 0 then best = w; break end
   end
 
   local outn, outf, outs, outsh = self.outn, self.outf, self.outs, self.outsh
-  local bp, bf, bs2, bh = A.path[best], A.fing[best], A.strn[best], A.shft[best]
-  for i = 1, ns do
-    outn[i] = bp[i]; outf[i] = bf[i]; outs[i] = bs2[i]; outsh[i] = bh[i]
+  local x = best
+  for i = ns, 1, -1 do
+    outn[i] = bn[i][x]; outf[i] = bf[i][x]; outs[i] = bs[i][x]; outsh[i] = bh[i][x]
+    x = bw[i][x]
   end
 
-  self.pn = bp[ns]
-  if ns >= 2 then self.li = bp[ns] - bp[ns - 1] end
-  if ns >= 3 then self.li2 = bp[ns - 1] - bp[ns - 2] end
+  self.pn = outn[ns]
+  if ns >= 2 then self.li = outn[ns] - outn[ns - 1] end
+  if ns >= 3 then self.li2 = outn[ns - 1] - outn[ns - 2] end
   self.hlo, self.pf = A.hlo[best], A.pf[best]
   self.lastanch = tgt
+  local hiw, low = self.hiw, self.low
   for i = 1, ns do
-    if bp[i] > self.hiw then self.hiw = bp[i] end
-    if bp[i] < self.low then self.low = bp[i] end
+    local y = outn[i]
+    if y > hiw then hiw = y end
+    if y < low then low = y end
   end
-  self.hiw = self.hiw - 0.35
-  self.low = self.low + 0.35
+  self.hiw = hiw - 0.35
+  self.low = low + 0.35
 
   return ns
 end

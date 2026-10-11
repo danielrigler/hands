@@ -558,9 +558,13 @@ function S:has(c, n, ch)
 end
 
 function S:release(now, ov, keys)
+  local rt = self.cb.retime
   for k, a in pairs(self.act) do
     if a.dead then self.act[k] = nil
-    elseif not (keys and keys[k]) and a.te > now + ov then a.te = now + ov end
+    elseif not (keys and keys[k]) and a.te > now + ov then
+      a.te = now + ov
+      if rt then rt(a) end
+    end
   end
 end
 
@@ -606,7 +610,10 @@ function S:start_chord(i, plen, off)
     local tr = (L + adj) * ss
     local a = self.act[key]
     if a and not a.dead then
-      a.te = now + a.o + tr
+      local te = now + a.o + tr
+      local sh = te < a.te
+      a.te = te
+      if sh and self.cb.retime then self.cb.retime(a) end
       c.vv[v + 1] = a.v
     else
       local lv = slotlv(q, v, U)
